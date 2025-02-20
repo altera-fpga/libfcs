@@ -23,3 +23,5 @@ target_compile_options(FCS PRIVATE
   -Wpointer-arith              # Warn about anything that depends on the "size of" a function or void
   -Wcast-qual                  # Warn whenever a pointer is cast so as to remove a type qualifier
 )
+
+add_subdirectory(include)

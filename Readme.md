@@ -21,11 +21,11 @@ Following are the services provided:
 - HKDF
 
 ## Pre-requisite:
-1. cmake - 3.20.0 (build configuration tool)
+1. cmake - 3.24.0 (build configuration tool)
 2. arm gnu linaro toolchain (for linux aarch64 platform)
 3. make (build tool)
 
 ## Compilation steps
-cmake -S . -B build -DARCH=linux_aarch64 -DOS=linux
+cmake -S . -B build -DARCH=linux_aarch64
 cmake --build build
 This will generate the necessary build files and compile the library for the specified architecture and operating system. The compiled binaries will be available in the build directory.

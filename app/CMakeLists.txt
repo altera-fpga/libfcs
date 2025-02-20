@@ -16,5 +16,17 @@ target_link_libraries(
   ${CMAKE_THREAD_LIBS_INIT}
 )
 
-# Include the libfcs headers
-include_directories(${CMAKE_SOURCE_DIR}/lib/include)
+if(${ARCH} STREQUAL linux_aarch64)
+
+  set_target_properties(fcs_client PROPERTIES
+    ARCHIVE_OUTPUT_DIRECTORY    "${CMAKE_BINARY_DIR}/lib"
+    LIBRARY_OUTPUT_DIRECTORY    "${CMAKE_BINARY_DIR}/lib"
+    RUNTIME_OUTPUT_DIRECTORY    "${CMAKE_BINARY_DIR}/bin"
+  )
+
+  install(TARGETS fcs_client
+    RUNTIME
+      DESTINATION usr/bin
+      COMPONENT FCS_client_Runtime
+  )
+endif()

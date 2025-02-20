@@ -9,8 +9,5 @@ if (NOT DEFINED ARCH)
   set(ARCH ${DEFAULT_ARCH})
 endif ()
 
-target_include_directories(FCS PUBLIC "${CMAKE_SOURCE_DIR}/toolchain/${ARCH}/include")
-
 # Include directories for the FCS target
-target_include_directories(FCS PRIVATE "${CMAKE_SOURCE_DIR}/lib/include/os/${OS}")
 add_subdirectory(${ARCH})

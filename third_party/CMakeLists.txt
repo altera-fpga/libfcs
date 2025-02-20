@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT-0
 # Copyright (C) 2025 Altera
 
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 
 # Include necessary CMake modules
 include(ProcessorCount)
@@ -10,74 +10,90 @@ include(ExternalProject)
 # Get the number of available CPU cores
 ProcessorCount(NPROC)
 
-########################
-# libkcapi compilation #
-########################
-# Define directories for the libkcapi project
-set(LIBKCAPI_INSTALL_DIR ${CMAKE_BINARY_DIR}/libkcapi)
-set(LIBKCAPI_BUILD_DIR ${CMAKE_BINARY_DIR}/_deps)
+find_library(KCAPI_LIBRARY NAMES kcapi libkcapi)
 
-# Define commands for configuring, building, and installing libkcapi
-set(LIBKCAPI_CONFIGURE_COMMAND autoreconf -i ${LIBKCAPI_BUILD_DIR}/src/libkcapi &&
-	${LIBKCAPI_BUILD_DIR}/src/libkcapi/configure
-	--prefix=${LIBKCAPI_INSTALL_DIR}
-	--host=${CROSS_COMPILE} > /dev/null)
-set(LIBKCAPI_BUILD_COMMAND make -j${NPROC} > /dev/null)
-set(LIBKCAPI_INSTALL_COMMAND make install > /dev/null)
+if(KCAPI_LIBRARY STREQUAL KCAPI_LIBRARY-NOTFOUND)
+  ########################
+  # libkcapi compilation #
+  ########################
+  # Define directories for the libkcapi project
+  set(LIBKCAPI_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/libkcapi)
+  set(LIBKCAPI_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/libkcapi)
 
-# Add an external project for libkcapi
-ExternalProject_Add(libkcapi
-  PREFIX ${LIBKCAPI_BUILD_DIR}/  # Directory to store the built project
-  GIT_REPOSITORY https://github.com/smuellerDD/libkcapi.git  # Git repository URL
-  GIT_TAG v1.5.0  # Specific tag to checkout
-  CONFIGURE_COMMAND ${LIBKCAPI_CONFIGURE_COMMAND}  # Command to configure the project
-  BUILD_COMMAND ${LIBKCAPI_BUILD_COMMAND}  # Command to build the project
-  INSTALL_COMMAND ${LIBKCAPI_INSTALL_COMMAND}  # Command to install the project
-)
+  # Define commands for configuring, building, and installing libkcapi
+  set(LIBKCAPI_CONFIGURE_COMMAND autoreconf -i ${LIBKCAPI_BUILD_DIR}/src/libkcapi &&
+    ${LIBKCAPI_BUILD_DIR}/src/libkcapi/configure
+    --prefix=${LIBKCAPI_INSTALL_DIR}
+    --host=${CROSS_COMPILE} > /dev/null)
+  set(LIBKCAPI_BUILD_COMMAND make -j${NPROC} > /dev/null)
+  set(LIBKCAPI_INSTALL_COMMAND make install > /dev/null)
 
-# link libkcapi library with FCS
-target_link_libraries(FCS PUBLIC ${LIBKCAPI_INSTALL_DIR}/lib/libkcapi.so.1)
-target_include_directories(FCS PUBLIC ${LIBKCAPI_INSTALL_DIR}/include)
+  # Add an external project for libkcapi
+  ExternalProject_Add(libkcapi
+    PREFIX ${LIBKCAPI_BUILD_DIR}/  # Directory to store the built project
+    GIT_REPOSITORY https://github.com/smuellerDD/libkcapi.git  # Git repository URL
+    GIT_TAG v1.5.0  # Specific tag to checkout
+    CONFIGURE_COMMAND ${LIBKCAPI_CONFIGURE_COMMAND}  # Command to configure the project
+    BUILD_COMMAND ${LIBKCAPI_BUILD_COMMAND}  # Command to build the project
+    INSTALL_COMMAND ${LIBKCAPI_INSTALL_COMMAND}  # Command to install the project
+    BUILD_BYPRODUCTS ${LIBKCAPI_INSTALL_DIR}/lib/libkcapi.so.1
+  )
 
-######################
-# libfdt compilation #
-######################
-# Define directories for the libfdt project
-set(LIBFDT_BUILD_DIR ${CMAKE_BINARY_DIR}/libfdt)
-set(LIBFDT_INSTALL_DIR ${CMAKE_BINARY_DIR}/libfdt)
+  # link libkcapi library with FCS
+  target_link_libraries(FCS PUBLIC ${LIBKCAPI_INSTALL_DIR}/lib/libkcapi.so.1)
+  target_include_directories(FCS PUBLIC ${LIBKCAPI_INSTALL_DIR}/include)
 
-# Define commands for configuring, building, and installing libfdt
-set(LIBFDT_CONFIGURE_COMMAND echo "")
-set(LIBFDT_BUILD_COMMAND CC=${CROSS_COMPILE}-gcc make -C ../libfdt libfdt > /dev/null)
-set(LIBFDT_INSTALL_COMMAND mkdir -p ${LIBFDT_INSTALL_DIR} &&
-		cp ../libfdt/libfdt/libfdt.a ${LIBFDT_INSTALL_DIR}/ &&
-		cp ../libfdt/libfdt/libfdt.h ${LIBFDT_INSTALL_DIR} &&
-		cp ../libfdt/libfdt/libfdt_env.h ${LIBFDT_INSTALL_DIR} &&
-		cp ../libfdt/libfdt/fdt.h ${LIBFDT_INSTALL_DIR})
+  add_dependencies(FCS libkcapi)
 
-# Add an external project for libfdt
-ExternalProject_Add(libfdt
-  PREFIX ${CMAKE_BINARY_DIR}/_deps
-  GIT_REPOSITORY https://git.kernel.org/pub/scm/utils/dtc/dtc.git # Git repository URL
-  GIT_TAG b75515af4576173850734d6aed87069cef733961 #TODO: v1.7.3 or above
-  CONFIGURE_COMMAND ${LIBFDT_CONFIGURE_COMMAND} # Command to configure the project
-  BUILD_COMMAND ${LIBFDT_BUILD_COMMAND} # Command to build the project
-  INSTALL_COMMAND ${LIBFDT_INSTALL_COMMAND} # Command to install the project
-)
+else()
+  target_link_libraries(FCS PRIVATE ${KCAPI_LIBRARY})
+endif()
 
-# Add libfdt and libkcapi dependency for fcs
-add_dependencies(FCS libfdt)
-add_dependencies(FCS libkcapi)
 
-# link fdt library with FCS
-target_link_libraries(
-  FCS
-  PUBLIC
-  ${LIBFDT_INSTALL_DIR}/libfdt.a
-)
+find_library(FDT_LIBRARY NAMES fdt libfdt)
 
-target_include_directories(FCS PRIVATE "${LIBFDT_INSTALL_DIR}")
-target_include_directories(FCS PRIVATE "${CMAKE_BINARY_DIR}/libkcapi/include")
+if(FDT_LIBRARY STREQUAL FDT_LIBRARY-NOTFOUND)
+  ######################
+  # libfdt compilation #
+  ######################
+  # Define directories for the libfdt project
+  set(LIBFDT_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/libfdt)
+  set(LIBFDT_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/libfdt)
 
-# Add the include directories and library paths
-include_directories(${CMAKE_SOURCE_DIR}/lib)  # Include directory for headers
+  # Define commands for configuring, building, and installing libfdt
+  set(LIBFDT_CONFIGURE_COMMAND echo "")
+  set(LIBFDT_BUILD_COMMAND CC=${CROSS_COMPILE}-gcc make -C ../libfdt libfdt > /dev/null)
+  set(LIBFDT_INSTALL_COMMAND mkdir -p ${LIBFDT_INSTALL_DIR} &&
+      cp ../libfdt/libfdt/libfdt.so ${LIBFDT_INSTALL_DIR}/ &&
+      cp ../libfdt/libfdt/libfdt.h ${LIBFDT_INSTALL_DIR} &&
+      cp ../libfdt/libfdt/libfdt_env.h ${LIBFDT_INSTALL_DIR} &&
+      cp ../libfdt/libfdt/fdt.h ${LIBFDT_INSTALL_DIR})
+
+  # Add an external project for libfdt
+  ExternalProject_Add(libfdt
+    PREFIX ${CMAKE_CURRENT_BINARY_DIR}/_deps
+    GIT_REPOSITORY https://git.kernel.org/pub/scm/utils/dtc/dtc.git # Git repository URL
+    GIT_TAG b75515af4576173850734d6aed87069cef733961 #TODO: v1.7.3 or above
+    CONFIGURE_COMMAND ${LIBFDT_CONFIGURE_COMMAND} # Command to configure the project
+    BUILD_COMMAND ${LIBFDT_BUILD_COMMAND} # Command to build the project
+    INSTALL_COMMAND ${LIBFDT_INSTALL_COMMAND} # Command to install the project
+    BUILD_BYPRODUCTS ${LIBFDT_INSTALL_DIR}/libfdt.so
+  )
+
+  # Add libfdt and libkcapi dependency for fcs
+  add_dependencies(FCS libfdt)
+
+  # link fdt library with FCS
+  target_link_libraries(
+    FCS
+    PUBLIC
+    ${LIBFDT_INSTALL_DIR}/libfdt.so
+  )
+
+  target_include_directories(FCS PRIVATE "${LIBFDT_INSTALL_DIR}")
+
+else()
+  message("libfdt" ${FDT_LIBRARY})
+  target_link_libraries(FCS PUBLIC ${FDT_LIBRARY})
+endif()
+

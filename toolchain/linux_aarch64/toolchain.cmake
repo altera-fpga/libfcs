@@ -25,3 +25,5 @@ endif ()
 
 # Add common compile options
 add_compile_options(-Wall -Wextra -Wpedantic)
+
+set(OS linux)

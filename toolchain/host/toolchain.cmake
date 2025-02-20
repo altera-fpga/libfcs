@@ -21,3 +21,5 @@ endif ()
 set(SHARED_LIB ON)
 # Add common compile options
 add_compile_options(-Wall -Wextra -Wpedantic)
+
+set(OS linux)
