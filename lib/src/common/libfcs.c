@@ -1280,7 +1280,6 @@ FCS_OSAL_INT fcs_hkdf_request(FCS_OSAL_UUID *session_uuid, FCS_OSAL_U32 key_id,
 	hkdf_ctx.hkdf_req.output_key_obj = req->output_key_obj;
 	hkdf_ctx.hkdf_req.output_key_obj_len = req->output_key_obj_len;
 	hkdf_ctx.hkdf_req.hkdf_resp = req->hkdf_resp;
-	hkdf_ctx.hkdf_req.hkdf_resp_len = req->hkdf_resp_len;
 	hkdf_ctx.error_code_addr = &error_code;
 
 	ret = intf->hkdf_request(&hkdf_ctx);

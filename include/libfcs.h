@@ -42,9 +42,7 @@ struct fcs_hkdf_req {
 	/* Output key object length */
 	FCS_OSAL_U32 output_key_obj_len;
 	/* HKDF response */
-	FCS_OSAL_CHAR *hkdf_resp;
-	/* HKDF response length pointer */
-	FCS_OSAL_U32 *hkdf_resp_len;
+	FCS_OSAL_U32 *hkdf_resp;
 };
 
 /**

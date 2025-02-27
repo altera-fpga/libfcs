@@ -116,8 +116,7 @@ struct fcs_cmd_context {
 			FCS_OSAL_CHAR *output_key_obj;
 			FCS_OSAL_U32 output_key_obj_len;
 			/* Response status */
-			FCS_OSAL_CHAR *hkdf_resp;
-			FCS_OSAL_U32 *hkdf_resp_len;
+			FCS_OSAL_U32 *hkdf_resp;
 		} hkdf_req;
 
 		struct {

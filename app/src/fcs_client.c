@@ -226,8 +226,7 @@ static const struct option opts[] = {
 	{"len", required_argument, NULL, 15},
 	{"qspi_write", no_argument, NULL, 16},
 	{"qspi_erase", no_argument, NULL, 17},
-	{"hkdf_key_obj", required_argument, NULL, 18},
-	{"loglevel", required_argument, NULL, 19},
+	{"loglevel", required_argument, NULL, 18},
 	{NULL, 0, NULL, 0}
 };
 
@@ -296,8 +295,9 @@ static void fcs_client_usage(void)
 	       "\tSend the request to get the public key and save public key data into the output_filename\n\n");
 	printf("%-32s  %s", "-X|--ecdh_request -s <sid> -n <cid> -k <kid> -q <ecc_algorithm> -i <input_filename> -o <output_filename>\n",
 	       "\tSend the request on generating a share secret on Diffie-Hellman key exchange\n\n");
-	printf("%-32s  %s", "--hkdf_request -s <sid> -k <kid> --step_type <step-type> --mac_mode <> -z input1#input2#hkdf_out.obj -o <output_filename>\n",
-	       "\tSend the request on performing HKDF extract or expand according to prepared input file\n\tstep-type :\n\t\t0 - EXTRACT then EXPAND\n\t\t1 - EXPAND Only (non-GCM)\n\t\t2 - EXPAND Only (GCM)\n\tmac_mode :\n\t\t0 – SHA2-256 (block size 512, reserved)\n\t\t1 – SHA2-384 (block size 1024)\n\t\t2 – SHA2-512 (block size 1024, reserved)\n\n");
+	printf("%-32s  %s  %s", "--hkdf_request -s <sid> -k <kid> --step_type <step-type> --mac_mode <mac_mode> -z input1#input2#hkdf_output_key.obj\n",
+	       "\tSend the request on performing HKDF extract or expand according to prepared input file\n\tstep-type :\n\t\t0 - EXTRACT then EXPAND\n\t\t1 - EXPAND Only (non-GCM)\n\t\t2 - EXPAND Only (GCM)\n\tmac_mode :\n\t\t1 – SHA2-384 (block size 1024)\n",
+	       "\teg: --hkdf_req -s <session-uuid> -k 0 --step_type 0 --mac_mode 1 -z input1#input2#output_key.obj\n\n");
 	printf("%-32s  %s", "--mctp_req -i <input_filename> -o <output_filename>\n",
 	       "\tSend the request on MCTP protocol\n\n");
 	printf("%-32s  %s", "--get_jtag_id\n", "\tGet the JTAG ID Code\n\n");
@@ -716,12 +716,11 @@ int main(int argc, char *argv[])
 	struct fcs_aes_crypt_header *sdos_hdr;	FCS_OSAL_U32 jtag_id;
 	FCS_OSAL_U32 device_identity_len;
 	FCS_OSAL_U32 sel = 0xffffffff, qspi_txn_size = 0, qspi_addr = 0;
-	FCS_OSAL_CHAR *info;
-	FCS_OSAL_U32 info_len;
+	FCS_OSAL_CHAR *info = NULL;
+	FCS_OSAL_U32 info_len = 0;
 	FCS_OSAL_CHAR *op_key_obj = NULL;
 	FCS_OSAL_U32 op_key_obj_len;
-	FCS_OSAL_CHAR *hkdf_resp;
-	FCS_OSAL_U32 hkdf_resp_len;
+	FCS_OSAL_U32 hkdf_resp_status;
 	FCS_OSAL_U32 crypt_mode = 0, block_mode = 0, ecc_curve = 0;
 	struct fcs_hkdf_req hkdf;
 	struct fcs_ecdsa_verify_req ecdsa_verify_req;
@@ -1217,15 +1216,6 @@ int main(int argc, char *argv[])
 			break;
 
 		case 18:
-			if (command != FCS_DEV_CRYPTO_HKDF_REQUEST_CMD) {
-				printf("This option is allowed only for hdkf request\n");
-				return -EINVAL;
-			}
-
-			op_key_obj = optarg;
-			break;
-
-		case 19:
 			set_loglevel = convert_string_to_long(optarg);
 
 			if (set_loglevel == 0)
@@ -1516,8 +1506,8 @@ int main(int argc, char *argv[])
 		break;
 
 	case FCS_DEV_CRYPTO_HKDF_REQUEST_CMD:
-		if (!filename_list || !op_key_obj) {
-			fprintf(stderr, "Missing input file list or output key object\n");
+		if (!filename_list) {
+			fprintf(stderr, "Missing input file list\n");
 			return -EINVAL;
 		}
 
@@ -1526,16 +1516,34 @@ int main(int argc, char *argv[])
 			return -EINVAL;
 		}
 
+		/* input1 file name */
 		file_name[0] = strtok(filename_list, "#");
-		file_index = 1;
-		while (file_index < 3) {
-			file_name[file_index] = strtok(NULL, "#");
-			if (!file_name[file_index])
-				break;
-			file_index++;
+		if (!file_name[0]) {
+			fprintf(stderr,
+				"input1 or input2 or output key object is missing\n");
+			return -EINVAL;
 		}
 
-		/* input 1 len */
+		/* input2 file is not required with step 1 */
+		if (step_type != 1) {
+			file_name[1] = strtok(NULL, "#");
+			if (!file_name[1]) {
+				fprintf(stderr,
+					"input1 or input2 or output key object is missing\n");
+			}
+		} else {
+			file_name[1] = NULL;
+		}
+
+		/* output key object file name */
+		file_name[2] = strtok(NULL, "#");
+		if (!file_name[2]) {
+			fprintf(stderr,
+				"input1 or input2 or output key object is missing\n");
+			return -EINVAL;
+		}
+
+		/* input1 buffer len */
 		src_len = get_buffer_size_from_file(file_name[0]);
 		if (src_len == 0) {
 			fprintf(stderr, "File: %s empty\n", file_name[0]);
@@ -1544,7 +1552,7 @@ int main(int argc, char *argv[])
 			return src_len;
 		}
 
-		/* input 1 buffer */
+		/* input1 buffer */
 		src = (FCS_OSAL_CHAR *)malloc(src_len * sizeof(FCS_OSAL_CHAR));
 		if (!src) {
 			fprintf(stderr, "Failed to allocate memory for hkdf request\n");
@@ -1559,44 +1567,49 @@ int main(int argc, char *argv[])
 			return ret;
 		}
 
-		/* input 2 len */
-		file_size = get_buffer_size_from_file(file_name[1]);
-		if (file_size == 0) {
-			fprintf(stderr, "File: %s empty\n", file_name[1]);
-			return -EINVAL;
-		} else if (file_size < 0) {
-			return file_size;
+		/* input2 buffer len */
+		if (step_type != 1) {
+			file_size = get_buffer_size_from_file(file_name[1]);
+			if (file_size == 0) {
+				fprintf(stderr, "File: %s empty\n",
+					file_name[1]);
+				return -EINVAL;
+			} else if (file_size < 0) {
+				return file_size;
+			}
+
+			info_len = file_size;
+
+			/* input2 buffer */
+			info = (FCS_OSAL_CHAR *)malloc(info_len);
+			if (!info) {
+				fprintf(stderr, "Failed to allocate memory for hkdf info\n");
+				free(src);
+				return -ENOMEM;
+			}
+
+			ret = load_buffer_from_file(file_name[1], info);
+			if (ret < 0) {
+				fprintf(stderr, "Failed to load buffer from file: %s err:%d\n",
+					file_name[1], ret);
+				free(src);
+				free(info);
+				return ret;
+			}
 		}
 
-		info_len = file_size;
-
-		/* input 2 buffer */
-		info = (FCS_OSAL_CHAR *)malloc(info_len *
-					       sizeof(FCS_OSAL_CHAR));
-		if (!info) {
-			fprintf(stderr, "Failed to allocate memory for hkdf info\n");
-			free(src);
-			return -ENOMEM;
-		}
-
-		ret = load_buffer_from_file(file_name[1], info);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to load buffer from file: %s err:%d\n",
-				file_name[1], ret);
-			free(src);
-			free(info);
-			return ret;
-		}
-
+		/* output key object buffer len */
 		file_size = get_buffer_size_from_file(file_name[2]);
 		if (file_size == 0) {
 			fprintf(stderr, "File: %s empty\n", file_name[2]);
 			free(src);
-			free(info);
+			if (step_type != 1)
+				free(info);
 			return -EINVAL;
 		} else if (file_size < 0) {
 			free(src);
-			free(info);
+			if (step_type != 1)
+				free(info);
 			return file_size;
 		}
 
@@ -1607,7 +1620,8 @@ int main(int argc, char *argv[])
 		if (!op_key_obj) {
 			fprintf(stderr, "Failed to allocate memory for hkdf output key object\n");
 			free(src);
-			free(info);
+			if (step_type != 1)
+				free(info);
 			return -ENOMEM;
 		}
 
@@ -1616,20 +1630,10 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "Failed to load buffer from file: %s err:%d\n",
 				file_name[2], ret);
 			free(src);
-			free(info);
+			if (step_type != 1)
+				free(info);
 			free(op_key_obj);
 			return ret;
-		}
-
-		hkdf_resp_len = CRYPTO_HKDF_RESPONSE_MAX_SZ;
-
-		hkdf_resp = (FCS_OSAL_CHAR *)malloc(hkdf_resp_len);
-		if (!hkdf_resp) {
-			fprintf(stderr, "Failed to allocate memory for hkdf response\n");
-			free(src);
-			free(info);
-			free(op_key_obj);
-			return -ENOMEM;
 		}
 
 		hkdf.step_type = step_type;
@@ -1640,33 +1644,24 @@ int main(int argc, char *argv[])
 		hkdf.input2_len = info_len;
 		hkdf.output_key_obj = op_key_obj;
 		hkdf.output_key_obj_len = op_key_obj_len;
-		hkdf.hkdf_resp = hkdf_resp;
-		hkdf.hkdf_resp_len = &hkdf_resp_len;
+		hkdf.hkdf_resp = &hkdf_resp_status;
 
 		ret = fcs_hkdf_request(session_uuid, keyid, &hkdf);
 		if (ret) {
+			fprintf(stderr,
+				"HKDF req failed: mbox status: 0x%x hkdf status:0x%x\n",
+				ret, hkdf_resp_status);
 			free(src);
-			free(info);
+			if (step_type != 1)
+				free(info);
 			free(op_key_obj);
-			free(hkdf_resp);
-			return ret;
-		}
-
-		ret = store_buffer_to_file(outfilename, dst, dst_len);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to store kdk to file: %d\n",
-				ret);
-			free(src);
-			free(info);
-			free(op_key_obj);
-			free(hkdf_resp);
 			return ret;
 		}
 
 		free(src);
-		free(info);
+		if (step_type != 1)
+			free(info);
 		free(op_key_obj);
-		free(hkdf_resp);
 		break;
 
 	case FCS_DEV_GET_PROVISION_DATA_CMD:
