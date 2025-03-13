@@ -29,3 +29,6 @@ Following are the services provided:
 cmake -S . -B build -DARCH=linux_aarch64
 cmake --build build
 This will generate the necessary build files and compile the library for the specified architecture and operating system. The compiled binaries will be available in the build directory.
+
+### Debug build
+For debug build please add -DCMAKE_BUILD_TYPE=Debug to the configuration step in build process.

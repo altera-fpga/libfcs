@@ -2921,7 +2921,7 @@ static FCS_OSAL_INT fcs_fit_image_hash_verify(FCS_OSAL_UUID *session_uuid,
 	return ret;
 }
 
-inline void get_vab_cert(FCS_OSAL_CHAR *img, FCS_OSAL_SIZE img_size,
+static inline void get_vab_cert(FCS_OSAL_CHAR *img, FCS_OSAL_SIZE img_size,
 			 FCS_OSAL_CHAR **vab_cert, FCS_OSAL_UINT *vab_cert_len)
 {
 	FCS_OSAL_CHAR *img_end = img + img_size;
@@ -2929,7 +2929,7 @@ inline void get_vab_cert(FCS_OSAL_CHAR *img, FCS_OSAL_SIZE img_size,
 	*vab_cert = img_end - *vab_cert_len - FCS_CERT_LEN_PARAM_SZ;
 }
 
-inline void get_img_data_sz(FCS_OSAL_CHAR *img, FCS_OSAL_SIZE img_size,
+static inline void get_img_data_sz(FCS_OSAL_CHAR *img, FCS_OSAL_SIZE img_size,
 			    FCS_OSAL_SIZE *img_data_size)
 {
 	FCS_OSAL_CHAR *img_end = img + img_size;
