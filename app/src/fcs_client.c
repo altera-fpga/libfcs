@@ -16,6 +16,7 @@
 #define CRYPTO_HKDF_OBJECT_MAX_SZ		384
 #define CRYPTO_GET_KEY_INFO_MAX_SZ		144
 #define CRYPTO_MAX_SZ				0x400000
+#define CRYPTO_AES_GCM_TAG_LEN			16
 #define CRYPTO_DIGEST_MAX_SZ			CRYPTO_MAX_SZ
 #define ECDSA_PUB_KEY_MAX_SZ			CRYPTO_MAX_SZ
 #define ECDSA_SIGNATURE_MAX_SZ			CRYPTO_MAX_SZ
@@ -227,6 +228,7 @@ static const struct option opts[] = {
 	{"qspi_write", no_argument, NULL, 16},
 	{"qspi_erase", no_argument, NULL, 17},
 	{"loglevel", required_argument, NULL, 18},
+	{"tag", required_argument, NULL, 19},
 	{NULL, 0, NULL, 0}
 };
 
@@ -277,7 +279,9 @@ static void fcs_client_usage(void)
 	       "\tGet crypto service key info\n\n");
 	printf("%-32s  %s", "-x|--create_service_key -s|--sessionid <sessionid> -i <input_filename>\n",
 	       "\tCreate crypto service key to the device\n\n");
-	printf("%-32s  %s", "-Y|--aes_crypt -s <sid> -n <cid> -k <kid> -b <b_mode> -m <en/decrypt> -f <iv_file> -u <aad_file> -i <input_filename> -o <output_filename>\n",
+	printf("%-32s  %s", "-Y|--aes_crypt -s <sid> -n <cid> -k <kid> -b <b_mode>\n"
+		"-m <en/decrypt>-f <iv_file> -u <aad_file> --tag <tag_file> -i <input_filename>\n"
+		"-o <output_filename>\n",
 	       "\tAES encrypt (select m as 0) or decrypt (select m as 1) using crypto service key\n\n");
 	printf("%-32s  %s", "-N|--get_digest -s <sid> -n <cid> -k <kid> -g <sha_op_mode> -j <dig_sz> -i <input_filename> -o <output_filename>\n",
 	       "\tRequest the SHA-2 hash digest on a blob\n\n");
@@ -688,11 +692,10 @@ int main(int argc, char *argv[])
 	FCS_OSAL_U32 set_loglevel;
 	FCS_OSAL_CHAR *signature = NULL, *pubkey = NULL;
 	FCS_OSAL_U32 signature_len = 0, pubkey_len = 0;
-	FCS_OSAL_CHAR *src = NULL, *dst = NULL, *iv = NULL, *aad = NULL;
-	FCS_OSAL_UINT export_keylen, keyinfo_len, dst_len = 0, tag_len = 16,
-						  tag_count = 1, tag = 3;
+	FCS_OSAL_CHAR *src = NULL, *dst = NULL, *iv = NULL, *aad = NULL, *tag = NULL;
+	FCS_OSAL_UINT export_keylen, keyinfo_len, dst_len = 0, tag_len = 3;
 	FCS_OSAL_CHAR *filename = NULL, *outfilename = NULL, *iv_file = NULL,
-		      *aad_file = NULL;
+		      *aad_file = NULL, *tag_file = NULL;
 	FCS_OSAL_CHAR prnt = 0;
 	FCS_OSAL_U32 c_size = 0;
 	FCS_OSAL_CHAR c_type = 0;
@@ -1064,6 +1067,7 @@ int main(int argc, char *argv[])
 			}
 
 			verbose = true;
+
 			break;
 
 		case 'x':
@@ -1238,6 +1242,16 @@ int main(int argc, char *argv[])
 				snprintf(log_level, sizeof(log_level),
 					 "log_inf");
 			}
+			break;
+
+		case 19:
+			if (command != FCS_DEV_CRYPTO_AES_CRYPT_CMD) {
+				printf("Only one command allowed\n");
+				return -EINVAL;
+			}
+
+			tag_file = optarg;
+
 			break;
 
 		default:
@@ -1853,48 +1867,89 @@ int main(int argc, char *argv[])
 		if (block_mode == FCS_AES_BLOCK_MODE_GCM ||
 		    block_mode == FCS_AES_BLOCK_MODE_GHASH) {
 			if (!aad_file) {
-				fprintf(stderr, "Missing AAD filename\n");
+				fprintf(stderr, "Missing AAD filename. aad_len = 0\n");
+				aad_len = 0;
+			} else {
+				aad_len = get_buffer_size_from_file(aad_file);
+				if (aad_len == 0) {
+					fprintf(stderr, "File: %s empty or file does not exist\n",
+						aad_file);
+					if (iv)
+						free(iv);
+					free(src);
+					return -EINVAL;
+				}
+
+				/* Allocate memory to read iv from file */
+				aad = (FCS_OSAL_CHAR *)malloc(aad_len);
+				if (!aad) {
+					fprintf(stderr, "aad buffer allocation failed\n");
+					if (iv)
+						free(iv);
+					free(src);
+					return -ENOMEM;
+				}
+
+				ret = load_buffer_from_file(aad_file, aad);
+				if (ret < 0) {
+					fprintf(stderr, "Failed to load aad from file: %d\n",
+						ret);
+					free(src);
+					if (iv)
+						free(iv);
+					free(aad);
+					return ret;
+				}
+			}
+
+			if (!tag_file) {
+				fprintf(stderr, "Missing TAG filename\n");
 				if (iv)
 					free(iv);
+				if (aad)
+					free(aad);
 				free(src);
 				return -EINVAL;
 			}
 
-			file_size = get_buffer_size_from_file(aad_file);
-			if (file_size == 0) {
-				fprintf(stderr, "File: %s empty\n", aad_file);
-				if (iv)
-					free(iv);
-				free(src);
-				return -EINVAL;
-			} else if (file_size < 0) {
-				if (iv)
-					free(iv);
-				free(src);
-				return file_size;
-			}
+			/* Allocate memory to read TAG from file */
+			tag = (FCS_OSAL_CHAR *)malloc(CRYPTO_AES_GCM_TAG_LEN);
 
-			aad_len = file_size;
-
-			/* Allocate memory to read iv from file */
-			aad = (FCS_OSAL_CHAR *)malloc(aad_len);
-			if (!aad) {
-				fprintf(stderr, "Failed to allocate memory for aad buffer\n");
+			if (!tag) {
+				fprintf(stderr, "tag buffer allocation failed\n");
 				if (iv)
 					free(iv);
+				if (aad)
+					free(aad);
 				free(src);
 				return -ENOMEM;
 			}
 
-			ret = load_buffer_from_file(aad_file, aad);
-			if (ret < 0) {
-				fprintf(stderr, "Failed to load aad from file: %d\n",
-					ret);
-				free(src);
-				if (iv)
-					free(iv);
-				free(aad);
-				return ret;
+			if (crypt_mode == FCS_AES_DECRYPT) {
+				if (get_buffer_size_from_file(tag_file) != CRYPTO_AES_GCM_TAG_LEN) {
+					fprintf(stderr, "File: %s tag file size invalid\n",
+						tag_file);
+					if (iv)
+						free(iv);
+					if (aad)
+						free(aad);
+					free(src);
+					free(tag);
+					return -EINVAL;
+				}
+
+				ret = load_buffer_from_file(tag_file, tag);
+				if (ret < 0) {
+					fprintf(stderr,
+						"Failed to load tag from file: %d\n", ret);
+					free(src);
+					if (iv)
+						free(iv);
+					if (aad)
+						free(aad);
+					free(tag);
+					return ret;
+				}
 			}
 		}
 
@@ -1904,10 +1959,6 @@ int main(int argc, char *argv[])
 						FCS_AES_CRYPT_BLOCK_SIZE + 1) *
 					FCS_AES_CRYPT_BLOCK_SIZE :
 				(FCS_OSAL_U32)src_len;
-		tag_count = dst_len % (4 * 1024 * 1024) ?
-				    (dst_len / (4 * 1024 * 1024) + 1) :
-				    dst_len / (4 * 1024 * 1024);
-		dst_len += (tag_count * tag_len);
 		dst = (FCS_OSAL_CHAR *)malloc(dst_len);
 		if (!dst) {
 			fprintf(stderr, "Failed to allocate memory for kdk buffer\n");
@@ -1927,13 +1978,17 @@ int main(int argc, char *argv[])
 		aes_req.iv_source = FCS_AES_IV_SOURCE_EXTERNAL;
 		aes_req.iv = iv;
 		aes_req.iv_len = iv_len;
-		aes_req.tag_len = tag;
-		aes_req.aad_len = 0;
+		aes_req.tag = tag;
+		aes_req.tag_len = tag_len;
+		aes_req.aad_len = aad_len;
 		aes_req.aad = aad;
 		aes_req.input = src;
 		aes_req.ip_len = src_len;
 		aes_req.output = dst;
 		aes_req.op_len = &dst_len;
+
+		printf("AES mode: %d ENC/DEC: %d tag_len: %d aad_len: %d src_len: %d dst_len: %d\n",
+			block_mode, crypt_mode, tag_len, aad_len, src_len, dst_len);
 
 		ret = fcs_aes_crypt(session_uuid, keyid, context_id, &aes_req);
 		if (ret) {
@@ -1963,14 +2018,23 @@ int main(int argc, char *argv[])
 			return ret;
 		}
 
-		free(src);
+		if (crypt_mode == FCS_AES_ENCRYPT &&
+			(block_mode == FCS_AES_BLOCK_MODE_GCM ||
+				block_mode == FCS_AES_BLOCK_MODE_GHASH)) {
+			ret = store_buffer_to_file(tag_file, tag, CRYPTO_AES_GCM_TAG_LEN);
+		}
+
 		if (iv)
 			free(iv);
+		free(src);
 		free(dst);
 
 		if (block_mode == FCS_AES_BLOCK_MODE_GCM ||
-		    block_mode == FCS_AES_BLOCK_MODE_GHASH)
-			free(aad);
+			block_mode == FCS_AES_BLOCK_MODE_GHASH) {
+			if (aad)
+				free(aad);
+			free(tag);
+		}
 		break;
 
 	case FCS_DEV_CRYPTO_ECDH_REQUEST_CMD:

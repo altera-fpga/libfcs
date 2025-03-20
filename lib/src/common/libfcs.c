@@ -1421,6 +1421,7 @@ FCS_OSAL_INT fcs_aes_crypt(FCS_OSAL_UUID *session_uuid, FCS_OSAL_U32 key_id,
 	aes_ctx.aes.mode = req->block_mode;
 	aes_ctx.aes.crypt = req->crypt_mode;
 	aes_ctx.aes.iv_source = req->iv_source;
+	aes_ctx.aes.tag = req->tag;
 	aes_ctx.aes.tag_len = req->tag_len;
 	aes_ctx.aes.aad_len = req->aad_len;
 	aes_ctx.aes.aad = req->aad;

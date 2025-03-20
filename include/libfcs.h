@@ -175,6 +175,8 @@ struct fcs_aes_req {
 	FCS_OSAL_CHAR *iv;
 	/* IV length */
 	FCS_OSAL_U32 iv_len;
+	/* Pointer to Tag */
+	FCS_OSAL_CHAR *tag;
 	/* Tag length */
 	FCS_OSAL_U32 tag_len;
 	/* AAD length */

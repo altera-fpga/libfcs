@@ -158,11 +158,12 @@ struct fcs_cmd_context {
 			FCS_OSAL_U8 iv_source; /* IV src ext/int DRNG/Int IV_BASE & keyUID */
 			FCS_OSAL_CHAR *iv; /* IV */
 			FCS_OSAL_CHAR *aad; /* IV */
-			FCS_OSAL_CHAR *Tag; /* Tag */
+			FCS_OSAL_CHAR *tag; /* Tag */
 			FCS_OSAL_CHAR *input; /* Input data */
 			FCS_OSAL_UINT ip_len; /* Input Length */
 			FCS_OSAL_CHAR *output; /* Output data */
 			FCS_OSAL_UINT *op_len; /* Output Length */
+			FCS_OSAL_UINT input_pad; /*Input data padding length*/
 		} aes;
 
 		struct {
