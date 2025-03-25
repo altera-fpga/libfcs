@@ -284,13 +284,13 @@ FCS_OSAL_INT fcs_alloc_and_cpy_file_to_mem(const FCS_OSAL_CHAR *filename,
  * @param prop_name - fir node property name
  * @param err - error code
  */
-static FCS_OSAL_VOID fcs_linux_fit_get_debug(FCS_OSAL_CHAR *fit,
+static FCS_OSAL_VOID fcs_linux_fit_get_debug(const FCS_OSAL_VOID *fit,
 					     FCS_OSAL_INT noffset,
-					     FCS_OSAL_CHAR *prop_name,
+					     FCS_OSAL_VOID *prop_name,
 					     FCS_OSAL_INT err)
 {
 	FCS_LOG_DBG("Can't get '%s' property from FIT 0x%08lx, node: offset %d, name %s (%s)\n",
-		    prop_name, (ulong)fit, noffset,
+		    (FCS_OSAL_CHAR *)prop_name, (ulong)fit, noffset,
 		    fdt_get_name(fit, noffset, NULL), fdt_strerror(err));
 }
 
@@ -416,14 +416,14 @@ fcs_linux_fit_image_get_data_offset(FCS_OSAL_CHAR *fit, FCS_OSAL_INT noffset,
  * @return 0 on success, other value on failure
  *
  */
-static FCS_OSAL_INT fcs_linux_fit_image_get_data(FCS_OSAL_CHAR *fit,
+static FCS_OSAL_INT fcs_linux_fit_img_get_data(const FCS_OSAL_VOID *fit,
 						 FCS_OSAL_INT noffset,
-						 FCS_OSAL_CHAR **data,
+						 const FCS_OSAL_VOID **data,
 						 FCS_OSAL_SIZE *size)
 {
 	int len;
 
-	*data = fdt_getprop((const FCS_OSAL_VOID *)fit, noffset, FIT_DATA_PROP,
+	*data = fdt_getprop(fit, noffset, FIT_DATA_PROP,
 			    &len);
 	if (!*data) {
 		fcs_linux_fit_get_debug(fit, noffset, FIT_DATA_PROP, len);
@@ -526,7 +526,8 @@ FCS_OSAL_INT fcs_fit_image_get_data_and_size(FCS_OSAL_CHAR *fit,
 		*data = fit + offset;
 		*size = len;
 	} else {
-		ret = fcs_linux_fit_image_get_data(fit, noffset, data, size);
+		ret = fcs_linux_fit_img_get_data((const FCS_OSAL_VOID *)fit,
+						noffset, (const FCS_OSAL_VOID **)data, size);
 	}
 
 	return ret;
