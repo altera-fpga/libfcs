@@ -155,6 +155,15 @@ enum fcs_command_code {
 	FCS_DEV_CRYPTO_QSPI_ERASE_CMD,
 };
 
+static bool verbose;
+
+#define VERBOSE_PRINT(fmt, ...)                     \
+	do {                                        \
+		if (verbose) {                      \
+			printf(fmt, ##__VA_ARGS__); \
+		}                                   \
+	} while (0)
+
 /**
  * option_ops - translate the long options to short options
  *
@@ -316,8 +325,7 @@ static void fcs_client_usage(void)
 	printf("%-32s  %s",
 	       "--qspi_erase --addr <qspi_addr> --len <len in multiple of 0x400 words>\n",
 	       "\tErase the QSPI data\n\n");
-	printf("%-32s  %s", "-v|--verbose",
-	       "Verbose Level: log_err, log_wrn, log_inf, log_dbg, log_off\n\n");
+	printf("%-32s", "-v|--verbose\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
 	printf("\n");
 }
@@ -713,7 +721,6 @@ int main(int argc, char *argv[])
 	FCS_OSAL_U16 id = 0;
 	FCS_OSAL_U64 own = 0;
 	FCS_OSAL_CHAR *endptr;
-	FCS_OSAL_BOOL verbose = false;
 	FCS_OSAL_INT calc, pad = 0;
 	FCS_OSAL_U32 op_mode = 1;
 	struct fcs_aes_crypt_header *sdos_hdr;	FCS_OSAL_U32 jtag_id;
@@ -735,6 +742,7 @@ int main(int argc, char *argv[])
 	struct fcs_aes_req aes_req;
 	struct fcs_ecdh_req ecdh_req;
 
+	verbose = false;
 	memset(session_uuid, 0, sizeof(session_uuid));
 
 	while ((c = getopt_long(argc, argv, "ephlvxABEDHJKTISMNOPQUWXYZR:t:V:C:G:F:L:y:a:b:f:u:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
@@ -973,7 +981,7 @@ int main(int argc, char *argv[])
 
 		case 'h':
 			fcs_client_usage();
-			break;
+			return 0;
 
 		case 'i':
 			if (command == FCS_DEV_COMMAND_NONE) {
@@ -1285,6 +1293,8 @@ int main(int argc, char *argv[])
 		ret = fcs_close_service_session(session_uuid);
 		if (ret != 0)
 			return ret;
+
+		VERBOSE_PRINT("Close session successful\n");
 		break;
 
 	case FCS_DEV_RANDOM_NUMBER_GEN_CMD:
@@ -1316,6 +1326,8 @@ int main(int argc, char *argv[])
 		}
 
 		free(dst);
+
+		VERBOSE_PRINT("Random number generated\n");
 		break;
 
 	case FCS_DEV_CRYPTO_IMPORT_KEY_CMD:
@@ -1361,6 +1373,8 @@ int main(int argc, char *argv[])
 		}
 
 		free(src);
+
+		VERBOSE_PRINT("Import service key successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_EXPORT_KEY_CMD:
@@ -1403,6 +1417,8 @@ int main(int argc, char *argv[])
 		}
 
 		free(dst);
+
+		VERBOSE_PRINT("Export service key successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_REMOVE_KEY_CMD:
@@ -1420,6 +1436,8 @@ int main(int argc, char *argv[])
 		ret = fcs_remove_service_key(session_uuid, keyid);
 		if (ret)
 			return ret;
+
+		VERBOSE_PRINT("Removed service key successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_GET_KEY_INFO_CMD:
@@ -1464,6 +1482,8 @@ int main(int argc, char *argv[])
 
 		memset(dst, 0, CRYPTO_GET_KEY_INFO_MAX_SZ);
 		free(dst);
+
+		VERBOSE_PRINT("Get service key info successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_CREATE_KEY_CMD:
@@ -1517,6 +1537,8 @@ int main(int argc, char *argv[])
 		}
 
 		free(src);
+
+		VERBOSE_PRINT("Create service key successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_HKDF_REQUEST_CMD:
@@ -1676,6 +1698,8 @@ int main(int argc, char *argv[])
 		if (step_type != 1)
 			free(info);
 		free(op_key_obj);
+
+		VERBOSE_PRINT("HKDF request successful\n");
 		break;
 
 	case FCS_DEV_GET_PROVISION_DATA_CMD:
@@ -1709,6 +1733,8 @@ int main(int argc, char *argv[])
 
 		memset(dst, 0, sizeof(struct fcs_get_provision_data));
 		free(dst);
+
+		VERBOSE_PRINT("Get Provision data successful\n");
 		break;
 
 	case FCS_DEV_COUNTER_SET_CMD:
@@ -1768,6 +1794,8 @@ int main(int argc, char *argv[])
 		}
 
 		free(src);
+
+		VERBOSE_PRINT("Counter set successful\n");
 		break;
 
 	case FCS_DEV_COUNTER_SET_PREAUTHORIZED_CMD:
@@ -1789,6 +1817,8 @@ int main(int argc, char *argv[])
 							    test);
 		if (ret != 0)
 			return ret;
+
+		VERBOSE_PRINT("Counter set Preauthorized successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_AES_CRYPT_CMD:
@@ -2035,6 +2065,8 @@ int main(int argc, char *argv[])
 				free(aad);
 			free(tag);
 		}
+
+		VERBOSE_PRINT("AES Crypt successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_ECDH_REQUEST_CMD:
@@ -2109,6 +2141,8 @@ int main(int argc, char *argv[])
 
 		free(src);
 		free(dst);
+
+		VERBOSE_PRINT("ECDH request successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_GET_DIGEST_CMD:
@@ -2182,6 +2216,8 @@ int main(int argc, char *argv[])
 
 		free(src);
 		free(dst);
+
+		VERBOSE_PRINT("Get digest successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_MAC_VERIFY_CMD:
@@ -2289,6 +2325,8 @@ int main(int argc, char *argv[])
 
 		free(src);
 		free(dst);
+
+		VERBOSE_PRINT("MAC verification successful\n");
 		break;
 
 	case FCS_DEV_CHIP_ID_CMD:
@@ -2339,6 +2377,8 @@ int main(int argc, char *argv[])
 
 		memset(dst, 0, ATTESTATION_CERTIFICATE_RSP_MAX_SZ);
 		free(dst);
+
+		VERBOSE_PRINT("Attestation Get Certificate successful\n");
 		break;
 
 	case FCS_DEV_ATTESTATION_CERTIFICATE_RELOAD_CMD:
@@ -2350,6 +2390,8 @@ int main(int argc, char *argv[])
 		ret = fcs_attestation_certificate_reload(cert_request);
 		if (ret)
 			return ret;
+		
+		VERBOSE_PRINT("Attestation Certificate Reload successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_MCTP_REQUEST_CMD:
@@ -2414,6 +2456,8 @@ int main(int argc, char *argv[])
 
 		free(src);
 		free(dst);
+
+		VERBOSE_PRINT("MCTP request successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_GET_JTAG_ID_CMD:
@@ -2455,6 +2499,8 @@ int main(int argc, char *argv[])
 		}
 
 		free(dst);
+
+		VERBOSE_PRINT("Get device identity successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_QSPI_OPEN_CMD:
@@ -2462,6 +2508,8 @@ int main(int argc, char *argv[])
 		ret = fcs_qspi_open();
 		if (ret)
 			return ret;
+		
+		VERBOSE_PRINT("QSPI open successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_QSPI_CLOSE_CMD:
@@ -2469,6 +2517,8 @@ int main(int argc, char *argv[])
 		ret = fcs_qspi_close();
 		if (ret)
 			return ret;
+
+		VERBOSE_PRINT("QSPI close successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_QSPI_CS_CMD:
@@ -2480,6 +2530,8 @@ int main(int argc, char *argv[])
 		ret = fcs_qspi_set_cs(sel);
 		if (ret)
 			return ret;
+
+		VERBOSE_PRINT("QSPI CS select successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_QSPI_READ_CMD:
@@ -2514,6 +2566,8 @@ int main(int argc, char *argv[])
 		}
 
 		free(dst);
+
+		VERBOSE_PRINT("QSPI read successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_QSPI_WRITE_CMD:
@@ -2553,6 +2607,8 @@ int main(int argc, char *argv[])
 		}
 
 		free(src);
+
+		VERBOSE_PRINT("QSPI write successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_QSPI_ERASE_CMD:
@@ -2564,6 +2620,8 @@ int main(int argc, char *argv[])
 		ret = fcs_qspi_erase(qspi_addr, qspi_txn_size);
 		if (ret)
 			return ret;
+
+		VERBOSE_PRINT("QSPI erase successful\n");
 		break;
 
 	case FCS_DEV_DATA_ENCRYPTION_CMD:
@@ -2689,6 +2747,8 @@ int main(int argc, char *argv[])
 		memset(dst, 0, SDOS_ENCRYPTED_MAX_SZ);
 		free(src);
 		free(dst);
+
+		VERBOSE_PRINT("Data encryption successful\n");
 		break;
 
 	case FCS_DEV_DATA_DECRYPTION_CMD:
@@ -2796,6 +2856,8 @@ int main(int argc, char *argv[])
 		memset(dst, 0, SDOS_DECRYPTED_MAX_SZ);
 		free(src);
 		free(dst);
+
+		VERBOSE_PRINT("Data Decryption successful\n");
 		break;
 
 	case  FCS_DEV_CRYPTO_ECDSA_GET_PUBLIC_KEY_CMD:
@@ -2835,6 +2897,8 @@ int main(int argc, char *argv[])
 		}
 
 		free(dst);
+
+		VERBOSE_PRINT("Get ECDSA public key successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_ECDSA_HASH_SIGNING_CMD:
@@ -2910,6 +2974,8 @@ int main(int argc, char *argv[])
 
 		free(src);
 		free(dst);
+
+		VERBOSE_PRINT("ECDSA hash signing successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_ECDSA_HASH_VERIFY_CMD:
@@ -3076,6 +3142,8 @@ int main(int argc, char *argv[])
 
 		if (dst[0] != 0x0d && dst[1] != 0x90)
 			fprintf(stderr, "ECDSA Hash data verify failed\n");
+		else
+			VERBOSE_PRINT("ECDSA Hash verify successful\n");
 
 		free(src);
 		free(dst);
@@ -3157,6 +3225,8 @@ int main(int argc, char *argv[])
 
 		free(src);
 		free(dst);
+
+		VERBOSE_PRINT("ECDSA SHA2 data signing successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_VERIFY_CMD:
@@ -3323,6 +3393,8 @@ int main(int argc, char *argv[])
 
 		if (dst[0] != 0x0d && dst[1] != 0x90)
 			fprintf(stderr, "ECDSA SHA2 Data verify failed\n");
+		else
+			VERBOSE_PRINT("ECDSA SHA2 Data verify successful\n");
 
 		free(src);
 		free(dst);
@@ -3345,6 +3417,8 @@ int main(int argc, char *argv[])
 		ret = fcs_validate_hps_image(session_uuid, filename);
 		if (ret)
 			return ret;
+
+		VERBOSE_PRINT("Validated HPS image: %s successfully\n", filename);
 		break;
 
 	case FCS_DEV_COMMAND_NONE:
