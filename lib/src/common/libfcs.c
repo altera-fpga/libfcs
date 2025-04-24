@@ -3138,3 +3138,84 @@ free_hps_buff:
 
 	return ret;
 }
+
+FCS_OSAL_INT fcs_mbox_send_cmd(FCS_OSAL_U32 mbox_cmd_code, FCS_OSAL_CHAR *src,
+			       FCS_OSAL_U32 src_len, FCS_OSAL_CHAR *dst,
+			       FCS_OSAL_U32 *dst_len)
+{
+	FCS_OSAL_INT ret = 0;
+	FCS_OSAL_INT err_code = 0;
+	struct fcs_cmd_context mbox_ctx;
+
+	/* Check if library initialized */
+	if (ctx.state != initialized) {
+		FCS_LOG_ERR("FCS library not initialized\n");
+		return -EINVAL;
+	}
+
+	/* Check for valid mailbox command interface */
+	if (intf->mbox_send_cmd == NULL) {
+		FCS_LOG_ERR("Mailbox send command API not available\n");
+		return -ENXIO;
+	}
+
+	/* Check if src is valid if source length is passed */
+	if (src_len) {
+		if (!src) {
+			FCS_LOG_ERR("Invalid argument: src is null\n");
+			return -EINVAL;
+		}
+	}
+
+	/* Check if dst is valid if destination length is passed */
+	if (dst_len) {
+		if (!dst) {
+			FCS_LOG_ERR("Invalid argument: dst is null\n");
+			return -EINVAL;
+		}
+	}
+
+	/* Mutex lock */
+	if (MUTEX_LOCK() != 0) {
+		FCS_LOG_ERR("Mutex lock failed in generic mbox\n");
+		return -EAGAIN;
+	}
+
+	FCS_LOG_DBG("Sending mailbox command\n");
+
+	/* Initialize the mailbox context */
+	memset(&mbox_ctx, 0, sizeof(struct fcs_cmd_context));
+
+	/* Setup for the mailbox context can be added here */
+	mbox_ctx.mbox.mbox_cmd = mbox_cmd_code;
+	mbox_ctx.mbox.cmd_data  = src;
+	mbox_ctx.mbox.cmd_data_sz  = src_len;
+	mbox_ctx.mbox.resp_data = dst;
+	mbox_ctx.mbox.resp_data_sz = dst_len;
+
+	mbox_ctx.error_code_addr = &err_code;
+
+	FCS_LOG_DBG("Sending mailbox command with code: %d\n", mbox_cmd_code);
+
+	/* Send the mailbox command */
+	ret = intf->mbox_send_cmd(&mbox_ctx);
+	if (ret == -EBADF) {
+		FCS_LOG_ERR("Generic mailbox command is supported only when kernel is compiled with debug build\n");
+	} else if (ret != 0) {
+		FCS_LOG_ERR("Error in sending generic mbox command %s\n",
+			    strerror(errno));
+	} else if (err_code) {
+		ret = err_code;
+		FCS_LOG_ERR(
+			"Failed mbox generic with sdm error code = %x\n",
+			err_code);
+	}
+
+	/* Mutex unlock */
+	if (MUTEX_UNLOCK() != 0) {
+		FCS_LOG_ERR("Mutex unlock failed in generic mbox command\n");
+		return -EAGAIN;
+	}
+
+	return ret;
+}

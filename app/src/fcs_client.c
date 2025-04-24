@@ -25,6 +25,7 @@
 #define JTAG_ID_MAX_SZ				1024
 #define DEVICE_IDENTITY_MAX_SZ			1024
 #define RANDOM_NUMBER_MAX_SZ			4080
+#define GENERIC_MBOX_RESPONSE_MAX_SZ		4096
 
 /* default cert status*/
 #define FCS_CERT_STATUS_NONE			0xFFFFFFFF
@@ -153,6 +154,8 @@ enum fcs_command_code {
 	FCS_DEV_CRYPTO_QSPI_WRITE_CMD,
 	/* QSPI erase operation */
 	FCS_DEV_CRYPTO_QSPI_ERASE_CMD,
+	/* Generic mailbox support */
+	FCS_DEV_MBOX_SEND_CMD,
 };
 
 static bool verbose;
@@ -222,6 +225,9 @@ static const struct option opts[] = {
 	{"create_service_key", no_argument, NULL, 'x'},
 	{"counter_type", required_argument, NULL, 'y'},
 	{"in_filename_list", required_argument, NULL, 'z'},
+	{"mbox_send_cmd", no_argument, NULL, 1},
+	{"cmd_code", required_argument, NULL, 2},
+	{"payload", required_argument, NULL, 3},
 	{"hkdf_request", no_argument, NULL, 4},
 	{"step_type", required_argument, NULL, 5},
 	{"mac_mode", required_argument, NULL, 6},
@@ -732,6 +738,10 @@ int main(int argc, char *argv[])
 	FCS_OSAL_U32 op_key_obj_len;
 	FCS_OSAL_U32 hkdf_resp_status;
 	FCS_OSAL_U32 crypt_mode = 0, block_mode = 0, ecc_curve = 0;
+	FCS_OSAL_INT mbox_cmd_code = -1;
+	FCS_OSAL_INT payload_num_args = 0;
+	FCS_OSAL_U32 *payload = NULL;
+	FCS_OSAL_U32 payload_size = 0;
 	struct fcs_hkdf_req hkdf;
 	struct fcs_ecdsa_verify_req ecdsa_verify_req;
 	struct fcs_ecdsa_req ecdsa_req;
@@ -1096,6 +1106,69 @@ int main(int argc, char *argv[])
 
 		case 'z':
 			filename_list = optarg;
+			break;
+
+		case 1:
+			if (command != FCS_DEV_COMMAND_NONE) {
+				printf("Only one command allowed\n");
+				return -EINVAL;
+			}
+
+			command = FCS_DEV_MBOX_SEND_CMD;
+			break;
+
+		case 2:
+			mbox_cmd_code = convert_string_to_long(optarg);
+			break;
+
+		case 3:
+			if (command != FCS_DEV_MBOX_SEND_CMD) {
+				fprintf(stderr, "Only Generic Mailbox command is supported with this option\n");
+				return -EINVAL;
+			}
+
+			char *token = strtok(optarg, " ");
+			while (token) {
+				payload_num_args++;
+
+				char *endptr;
+
+				// Convert to from string to integer
+				unsigned long value = strtol(token, &endptr, 0);
+				if (*endptr != '\0') {
+					fprintf(stderr, "Invalid integer: %s\n",
+						token);
+					free(payload);
+					return -EINVAL;
+				}
+
+				/* value shouldn't be greater than UINT32_MAX */
+				if (value > UINT32_MAX) {
+					fprintf(stderr,
+						"Value out of 32-bit range: %s\n",
+						token);
+					free(payload);
+					return -EINVAL;
+				}
+
+				/* Reallocate payload based on the update in the number of arguments */
+				payload = realloc(payload,
+						  payload_num_args *
+							  sizeof(FCS_OSAL_U32));
+				if (!payload) {
+					fprintf(stderr,
+						"Memory allocation failed\n");
+					return -ENOMEM;
+				}
+
+				/* Store the value in the payload */
+				payload[payload_num_args - 1] = value;
+
+				token = strtok(NULL, " ");
+			}
+
+			/* Check if the payload is empty */
+			payload_size = payload_num_args * sizeof(FCS_OSAL_U32);
 			break;
 
 		case 4:
@@ -3419,6 +3492,55 @@ int main(int argc, char *argv[])
 			return ret;
 
 		VERBOSE_PRINT("Validated HPS image: %s successfully\n", filename);
+		break;
+
+	case FCS_DEV_MBOX_SEND_CMD:
+		if (mbox_cmd_code == -1) {
+			fprintf(stderr, "Incorrect command code\n");
+			return -EINVAL;
+		}
+
+		/* Max destination length */
+		dst_len = GENERIC_MBOX_RESPONSE_MAX_SZ;
+
+		/* Allocate buffer for response */
+		dst = (FCS_OSAL_CHAR *)malloc(dst_len);
+		if (!dst) {
+			fprintf(stderr,
+				"Failed to allocate memory for mbox response\n");
+			free(payload);
+			return -ENOMEM;
+		}
+
+		/* Send generic mailbox command */
+		ret = fcs_mbox_send_cmd((FCS_OSAL_U32)mbox_cmd_code,
+					(FCS_OSAL_VOID *)payload, payload_size,
+					dst, &dst_len);
+		if (ret) {
+			fprintf(stderr, "Failed to send command with err: %d\n",
+				ret);
+			free(payload);
+			free(dst);
+			return ret;
+		}
+
+		if (outfilename) {
+			ret = store_buffer_to_file(outfilename, dst, dst_len);
+			if (ret < 0) {
+				fprintf(stderr, "Failed to store mailbox response to file: %d\n",
+					ret);
+				free(payload);
+				free(dst);
+				return ret;
+			}
+		}
+
+		/* Free payload and response buffer */
+		free(payload);
+		free(dst);
+
+		VERBOSE_PRINT("Mailbox command: %d executed successfully\n",
+			       mbox_cmd_code);
 		break;
 
 	case FCS_DEV_COMMAND_NONE:

@@ -766,12 +766,29 @@ FCS_OSAL_INT fcs_validate_hps_image(FCS_OSAL_UUID *session_uuid,
 				    FCS_OSAL_CHAR *hps_image);
 
 /**
+ * @brief Sends a generic mailbox command.
+ *
+ * This function sends a generic mailbox command and receives a response.
+ *
+ * @param mbox_cmd_code The mailbox command code.
+ * @param src Pointer to the source buffer.
+ * @param src_len The length of the source buffer.
+ * @param dst Pointer to the destination buffer.
+ * @param dst_len Pointer to the length of the destination buffer.
+ *
+ * @return An integer returns 0 indicating the success otherwise failure of the
+ * operation.
+ */
+FCS_OSAL_INT fcs_mbox_send_cmd(FCS_OSAL_U32 mbox_cmd_code, FCS_OSAL_CHAR *src,
+	FCS_OSAL_U32 src_len, FCS_OSAL_CHAR *dst,
+	FCS_OSAL_U32 *dst_len);
+
+/**
  * @brief Initializes the FCS library.
  *
  * @param loglevel set log level
  * @return 0 on success, negative value on error.
  */
-
 FCS_OSAL_INT libfcs_init(FCS_OSAL_CHAR *loglevel);
 
 #ifdef __cplusplus

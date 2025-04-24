@@ -224,7 +224,6 @@ struct fcs_cmd_context {
 
 		struct {
 			FCS_OSAL_U32 mbox_cmd;
-			FCS_OSAL_U8 urgent;
 			FCS_OSAL_VOID *cmd_data;
 			FCS_OSAL_U32 cmd_data_sz;
 			FCS_OSAL_VOID *resp_data;
@@ -413,6 +412,7 @@ struct libfcs_osal_intf {
 	FCS_OSAL_INT (*ecdsa_sha2_data_sign)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*ecdsa_sha2_data_verify)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*hps_img_validate)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*mbox_send_cmd)(struct fcs_cmd_context *ctx);
 };
 
 /**

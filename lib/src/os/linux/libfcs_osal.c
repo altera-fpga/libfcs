@@ -80,6 +80,7 @@ static FCS_OSAL_INT fcs_linux_ecdsa_sha2_data_sign(struct fcs_cmd_context *ctx);
 static FCS_OSAL_INT
 fcs_linux_ecdsa_sha2_data_verify(struct fcs_cmd_context *ctx);
 static FCS_OSAL_INT fcs_linux_hps_img_validate(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_mbox_send_cmd(struct fcs_cmd_context *ctx);
 
 /**
  * @brief Allocate memory of given size.
@@ -1098,6 +1099,20 @@ static FCS_OSAL_INT fcs_linux_ecdsa_sha2_data_verify(struct fcs_cmd_context *ctx
 }
 
 /**
+ * @brief Send a generic mailbox command
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_mbox_send_cmd(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "generic_mbox",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
  * @brief Initialize log level for libkcapi
  *
  * @param loglevel
@@ -1176,6 +1191,7 @@ static FCS_OSAL_INT fcs_linux_api_binding(struct libfcs_osal_intf *intf)
 	intf->ecdsa_sha2_data_sign = fcs_linux_ecdsa_sha2_data_sign;
 	intf->ecdsa_sha2_data_verify = fcs_linux_ecdsa_sha2_data_verify;
 	intf->hps_img_validate = fcs_linux_hps_img_validate;
+	intf->mbox_send_cmd = fcs_linux_mbox_send_cmd;
 
 	return 0;
 }
