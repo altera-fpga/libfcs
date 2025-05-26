@@ -81,6 +81,25 @@ static FCS_OSAL_INT
 fcs_linux_ecdsa_sha2_data_verify(struct fcs_cmd_context *ctx);
 static FCS_OSAL_INT fcs_linux_hps_img_validate(struct fcs_cmd_context *ctx);
 static FCS_OSAL_INT fcs_linux_mbox_send_cmd(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_ecdsa_data_sign_init(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT
+fcs_linux_ecdsa_data_sign_update(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT
+fcs_linux_ecdsa_data_sign_final(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_ecdsa_data_verify_init(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT
+fcs_linux_ecdsa_data_verify_update(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT
+fcs_linux_ecdsa_data_verify_final(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_aes_crypt_init(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_aes_crypt_update(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_aes_crypt_final(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_get_digest_init(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_get_digest_update(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_get_digest_final(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_mac_verify_init(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_mac_verify_update(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_mac_verify_final(struct fcs_cmd_context *ctx);
 
 /**
  * @brief Allocate memory of given size.
@@ -585,8 +604,7 @@ fcs_linux_service_get_provision_data(struct fcs_cmd_context *ctx)
 static FCS_OSAL_INT fcs_linux_random_number_ext(struct fcs_cmd_context *ctx)
 {
 	struct kcapi_handle *handle = NULL;
-	FCS_OSAL_INT ret = 0;
-
+	FCS_OSAL_INT ret;
 	/* Initialize the RNG context */
 	ret = kcapi_rng_init(&handle, "socfpga_rng", 0);
 	if (ret < 0) {
@@ -721,6 +739,33 @@ static FCS_OSAL_INT fcs_linux_hkdf_request(struct fcs_cmd_context *ctx)
 	return put_devattr(fcs_dev_local, "hkdf_req", (FCS_OSAL_CHAR *)&ctx,
 			   sizeof(struct fcs_cmd_context *));
 }
+
+/**
+ * @brief AES cryptography operation
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_get_digest_init(struct fcs_cmd_context *ctx);
+
+/**
+ * @brief AES cryptography operation
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_get_digest_update(struct fcs_cmd_context *ctx);
+
+/**
+ * @brief AES cryptography operation
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_get_digest_final(struct fcs_cmd_context *ctx);
 
 /**
  * @brief Get chip ID
@@ -921,47 +966,9 @@ static FCS_OSAL_INT fcs_linux_ecdh_req(struct fcs_cmd_context *ctx)
  */
 static FCS_OSAL_INT fcs_linux_get_digest(struct fcs_cmd_context *ctx)
 {
-	FCS_OSAL_INT ret = 0;
-	struct kcapi_handle *handle = NULL;
-	const char *algos[3][3] = {
-		{ "NULL", "NULL", "NULL" },
-		{ "socfpga-sha256", "socfpga-sha384", "socfpga-sha512" },
-		{ "socfpga-hmac-sha256", "socfpga-hmac-sha384",
-		  "socfpga-hmac-sha512" }
-	};
-	const FCS_OSAL_INT digest_sizes[3] = { 32, 48, 64 };
-
-	ret = put_devattr(fcs_dev_local, "context_info", (FCS_OSAL_CHAR *)&ctx,
-			  sizeof(struct fcs_cmd_context *));
-	if (ret != 0)
-		return ret;
-
-	/* Initialize the handle */
-	ret = kcapi_md_init(
-		&handle, algos[ctx->dgst.sha_op_mode][ctx->dgst.sha_digest_sz],
-		0);
-	if (ret < 0) {
-		FCS_LOG_ERR("Error initializing digest handle: %s\n",
-			    strerror(-ret));
-		return ret;
-	}
-
-	ret = kcapi_md_digest(handle, (uint8_t *)ctx->dgst.src,
-			      ctx->dgst.src_len, (uint8_t *)ctx->dgst.digest,
-			      digest_sizes[ctx->dgst.sha_digest_sz]);
-	if (ret < 0) {
-		FCS_LOG_ERR("Error updating digest: %s\n", strerror(-ret));
-	} else if (ret != digest_sizes[ctx->dgst.sha_digest_sz]) {
-		FCS_LOG_ERR("Digest size mismatch: %d\n", ret);
-		ret = -EINVAL;
-	} else {
-		*ctx->dgst.digest_len = ret;
-		ret = 0;
-	}
-
-	kcapi_md_destroy(handle);
-
-	return ret;
+	return put_devattr(fcs_dev_local, "get_digest",
+		(FCS_OSAL_CHAR *)&ctx,
+		sizeof(struct fcs_cmd_context *));
 }
 
 /**
@@ -1000,6 +1007,134 @@ static FCS_OSAL_INT fcs_linux_hps_img_validate(struct fcs_cmd_context *ctx)
 			    *ctx_ptr->error_code_addr);
 
 	return *ctx_ptr->error_code_addr;
+}
+
+/**
+ * @brief ECDSA data sign initialization
+ * 
+ * @param ctx Context pointer to the context of the command
+ * 
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_ecdsa_data_sign_init(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "ecdsa_data_sign_init",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief ECDSA data sign update stage
+ * 
+ * @param ctx Context pointer to the context of the command
+ * 
+ * @return 0 on success, otherwise value on error.
+*/
+static FCS_OSAL_INT
+fcs_linux_ecdsa_data_sign_update(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "ecdsa_data_sign_up",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief ECDSA data sign final stage
+ * 
+ * @param ctx Context pointer to the context of the command
+ * 
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_ecdsa_data_sign_final(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "ecdsa_data_sign_final",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief ECDSA data verify initialization
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_ecdsa_data_verify_init(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "ecdsa_data_verify_init",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief ECDSA data verify update stage
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT
+fcs_linux_ecdsa_data_verify_update(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "ecdsa_data_verify_up",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief ECDSA data verify final stage
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_ecdsa_data_verify_final(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "ecdsa_data_verify_final",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief Perform AES encryption/decryption operation init stage
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_aes_crypt_init(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "aes_crypt_init",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief Perform AES encryption/decryption operation update stage
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_aes_crypt_update(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "aes_crypt_update",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief Perform AES encryption/decryption operation final stage
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_aes_crypt_final(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "aes_crypt_final",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
 }
 
 /**
@@ -1113,6 +1248,90 @@ static FCS_OSAL_INT fcs_linux_mbox_send_cmd(struct fcs_cmd_context *ctx)
 }
 
 /**
+ * @brief Get digest initialization
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_get_digest_init(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "get_digest_init",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief Get digest update
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_get_digest_update(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "get_digest_update",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief Get digest final
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_get_digest_final(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "get_digest_final",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief Perform MAC verification init operation
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_mac_verify_init(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "mac_verify_init",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief Perform MAC verification update operation
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_mac_verify_update(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "mac_verify_update",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
+ * @brief Perform MAC verification final operation
+ *
+ * @param ctx Context pointer to the context of the command
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_mac_verify_final(struct fcs_cmd_context *ctx)
+{
+	return put_devattr(fcs_dev_local, "mac_verify_final",
+			   (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
+}
+
+/**
  * @brief Initialize log level for libkcapi
  *
  * @param loglevel
@@ -1167,8 +1386,14 @@ static FCS_OSAL_INT fcs_linux_api_binding(struct libfcs_osal_intf *intf)
 	intf->counter_set = fcs_linux_counter_set;
 	intf->counter_set_preauthorized = fcs_linux_counter_set_preauthorized;
 	intf->hkdf_request = fcs_linux_hkdf_request;
+	intf->get_digest_init = fcs_linux_get_digest_init;
+	intf->get_digest_update = fcs_linux_get_digest_update;
+	intf->get_digest_final = fcs_linux_get_digest_final;
 	intf->get_digest = fcs_linux_get_digest;
 	intf->mac_verify = fcs_linux_mac_verify;
+	intf->mac_verify_init = fcs_linux_mac_verify_init;
+	intf->mac_verify_update = fcs_linux_mac_verify_update;
+	intf->mac_verify_final = fcs_linux_mac_verify_final;
 	intf->aes_crypt = fcs_linux_aes_crypt;
 	intf->ecdh_req = fcs_linux_ecdh_req;
 	intf->get_chip_id = fcs_linux_get_chip_id;
@@ -1192,6 +1417,15 @@ static FCS_OSAL_INT fcs_linux_api_binding(struct libfcs_osal_intf *intf)
 	intf->ecdsa_sha2_data_verify = fcs_linux_ecdsa_sha2_data_verify;
 	intf->hps_img_validate = fcs_linux_hps_img_validate;
 	intf->mbox_send_cmd = fcs_linux_mbox_send_cmd;
+	intf->ecdsa_data_sign_init = fcs_linux_ecdsa_data_sign_init;
+	intf->ecdsa_data_sign_update = fcs_linux_ecdsa_data_sign_update;
+	intf->ecdsa_data_sign_final = fcs_linux_ecdsa_data_sign_final;
+	intf->ecdsa_data_verify_init = fcs_linux_ecdsa_data_verify_init;
+	intf->ecdsa_data_verify_update = fcs_linux_ecdsa_data_verify_update;
+	intf->ecdsa_data_verify_final = fcs_linux_ecdsa_data_verify_final;
+	intf->aes_crypt_init = fcs_linux_aes_crypt_init;
+	intf->aes_crypt_update = fcs_linux_aes_crypt_update;
+	intf->aes_crypt_final = fcs_linux_aes_crypt_final;
 
 	return 0;
 }

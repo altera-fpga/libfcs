@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "fcs_struct.h"
+#include "fcs_version.h"
 
 /* Commmand request/response sizes */
 #define CRYPTO_EXPORTED_KEY_OBJECT_MAX_SZ	364
@@ -244,6 +245,7 @@ static const struct option opts[] = {
 	{"qspi_erase", no_argument, NULL, 17},
 	{"loglevel", required_argument, NULL, 18},
 	{"tag", required_argument, NULL, 19},
+	{"version", no_argument, NULL, 20},
 	{NULL, 0, NULL, 0}
 };
 
@@ -331,6 +333,7 @@ static void fcs_client_usage(void)
 	printf("%-32s  %s",
 	       "--qspi_erase --addr <qspi_addr> --len <len in multiple of 0x400 words>\n",
 	       "\tErase the QSPI data\n\n");
+	printf("%-32s  %s", "--version", "Get fcs_client and libfcs version\n");
 	printf("%-32s", "-v|--verbose\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
 	printf("\n");
@@ -694,8 +697,7 @@ int main(int argc, char *argv[])
 {
 	FCS_OSAL_INT ret = 0, c, index, test = -1;
 	FCS_OSAL_INT keyid = -1;
-	FCS_OSAL_INT context_id = 0, size = 0, src_len = 0, iv_len = 0,
-		     aad_len = 0, file_size = 0;
+	FCS_OSAL_INT context_id = 0, size = 0, src_len = 0, file_size = 0;
 	FCS_OSAL_CHAR status = FCS_GENERIC_ERR;
 	FCS_OSAL_CHAR *filename_list = NULL;
 	FCS_OSAL_UUID session_uuid[FCS_OSAL_UUID_SIZE];
@@ -706,8 +708,8 @@ int main(int argc, char *argv[])
 	FCS_OSAL_U32 set_loglevel;
 	FCS_OSAL_CHAR *signature = NULL, *pubkey = NULL;
 	FCS_OSAL_U32 signature_len = 0, pubkey_len = 0;
-	FCS_OSAL_CHAR *src = NULL, *dst = NULL, *iv = NULL, *aad = NULL, *tag = NULL;
-	FCS_OSAL_UINT export_keylen, keyinfo_len, dst_len = 0, tag_len = 3;
+	FCS_OSAL_CHAR *src = NULL, *dst = NULL;
+	FCS_OSAL_UINT export_keylen, keyinfo_len, dst_len = 0;
 	FCS_OSAL_CHAR *filename = NULL, *outfilename = NULL, *iv_file = NULL,
 		      *aad_file = NULL, *tag_file = NULL;
 	FCS_OSAL_CHAR prnt = 0;
@@ -722,7 +724,6 @@ int main(int argc, char *argv[])
 	FCS_OSAL_INT sha_op_mode = 0;
 	FCS_OSAL_CHAR *file_name[3];
 	FCS_OSAL_INT file_index = 0;
-	FCS_OSAL_INT input_sz0, input_sz1, input_sz;
 	FCS_OSAL_U32 out_sz = 32;
 	FCS_OSAL_U16 id = 0;
 	FCS_OSAL_U64 own = 0;
@@ -747,10 +748,11 @@ int main(int argc, char *argv[])
 	struct fcs_ecdsa_req ecdsa_req;
 	struct fcs_sdos_enc_req sdos_enc_req;
 	struct fcs_sdos_dec_req sdos_dec_req;
-	struct fcs_digest_get_req get_digest_req;
-	struct fcs_mac_verify_req mac_verify_req;
-	struct fcs_aes_req aes_req;
+	struct fcs_aes_req_streaming aes_req;
 	struct fcs_ecdh_req ecdh_req;
+	struct fcs_digest_req_streaming digest_req;
+	struct fcs_mac_verify_req_streaming mac_verify_req_streaming;
+	struct fcs_ecdsa_verify_req_streaming ecdsa_data_verify;
 
 	verbose = false;
 	memset(session_uuid, 0, sizeof(session_uuid));
@@ -1334,6 +1336,17 @@ int main(int argc, char *argv[])
 			tag_file = optarg;
 
 			break;
+		
+		case 20:
+
+			if (command != FCS_DEV_COMMAND_NONE) {
+				printf("Only one command allowed\n");
+				return -EINVAL;
+			}
+
+			printf("%s\n", fcs_get_version());
+			printf("FCS Client Version: %s\n", FCS_PROJECT_VERSION);
+			return 0;
 
 		default:
 			fcs_client_usage();
@@ -1900,243 +1913,20 @@ int main(int argc, char *argv[])
 			return -EINVAL;
 		}
 
-		if (!filename || !outfilename) {
-			fprintf(stderr, "Missing input or output filename\n");
-			return -EINVAL;
-		}
-
-		if (block_mode != 0 && !iv_file) {
-			fprintf(stderr, "NULL iv_field:  %s\n",
-				strerror(errno));
-			return -EINVAL;
-		}
-
-		file_size = get_buffer_size_from_file(filename);
-		if (file_size == 0) {
-			fprintf(stderr, "File: %s empty\n", filename);
-			return -EINVAL;
-		} else if (file_size < 0) {
-			return file_size;
-		}
-
-		src_len = file_size;
-
-		/* Allocate memory to read input data from file */
-		src = (FCS_OSAL_CHAR *)malloc(src_len);
-		if (!src) {
-			fprintf(stderr, "can't malloc buffer for input %s:  %s\n",
-				filename, strerror(errno));
-			return -ENOMEM;
-		}
-
-		ret = load_buffer_from_file(filename, src);
-		if (ret < 0) {
-			free(src);
-			fprintf(stderr, "Failed to load input data from file: %d\n",
-				ret);
-			return ret;
-		}
-		if (block_mode != 0) {
-			file_size = get_buffer_size_from_file(iv_file);
-			if (file_size == 0) {
-				fprintf(stderr, "File: %s empty\n", iv_file);
-				free(src);
-				return -EINVAL;
-			} else if (file_size < 0) {
-				free(src);
-				return file_size;
-			}
-
-			iv_len = file_size;
-
-			/* Allocate memory to read iv from file */
-			iv = (FCS_OSAL_CHAR *)malloc(iv_len);
-			if (!iv) {
-				fprintf(stderr, "Failed to allocate memory for iv buffer\n");
-				free(src);
-				return -ENOMEM;
-			}
-
-			ret = load_buffer_from_file(iv_file, iv);
-			if (ret < 0) {
-				fprintf(stderr, "Failed to load iv from file: %d\n",
-					ret);
-				free(src);
-				free(iv);
-				return ret;
-			}
-		}
-
-		if (block_mode == FCS_AES_BLOCK_MODE_GCM ||
-		    block_mode == FCS_AES_BLOCK_MODE_GHASH) {
-			if (!aad_file) {
-				fprintf(stderr, "Missing AAD filename. aad_len = 0\n");
-				aad_len = 0;
-			} else {
-				aad_len = get_buffer_size_from_file(aad_file);
-				if (aad_len == 0) {
-					fprintf(stderr, "File: %s empty or file does not exist\n",
-						aad_file);
-					if (iv)
-						free(iv);
-					free(src);
-					return -EINVAL;
-				}
-
-				/* Allocate memory to read iv from file */
-				aad = (FCS_OSAL_CHAR *)malloc(aad_len);
-				if (!aad) {
-					fprintf(stderr, "aad buffer allocation failed\n");
-					if (iv)
-						free(iv);
-					free(src);
-					return -ENOMEM;
-				}
-
-				ret = load_buffer_from_file(aad_file, aad);
-				if (ret < 0) {
-					fprintf(stderr, "Failed to load aad from file: %d\n",
-						ret);
-					free(src);
-					if (iv)
-						free(iv);
-					free(aad);
-					return ret;
-				}
-			}
-
-			if (!tag_file) {
-				fprintf(stderr, "Missing TAG filename\n");
-				if (iv)
-					free(iv);
-				if (aad)
-					free(aad);
-				free(src);
-				return -EINVAL;
-			}
-
-			/* Allocate memory to read TAG from file */
-			tag = (FCS_OSAL_CHAR *)malloc(CRYPTO_AES_GCM_TAG_LEN);
-
-			if (!tag) {
-				fprintf(stderr, "tag buffer allocation failed\n");
-				if (iv)
-					free(iv);
-				if (aad)
-					free(aad);
-				free(src);
-				return -ENOMEM;
-			}
-
-			if (crypt_mode == FCS_AES_DECRYPT) {
-				if (get_buffer_size_from_file(tag_file) != CRYPTO_AES_GCM_TAG_LEN) {
-					fprintf(stderr, "File: %s tag file size invalid\n",
-						tag_file);
-					if (iv)
-						free(iv);
-					if (aad)
-						free(aad);
-					free(src);
-					free(tag);
-					return -EINVAL;
-				}
-
-				ret = load_buffer_from_file(tag_file, tag);
-				if (ret < 0) {
-					fprintf(stderr,
-						"Failed to load tag from file: %d\n", ret);
-					free(src);
-					if (iv)
-						free(iv);
-					if (aad)
-						free(aad);
-					free(tag);
-					return ret;
-				}
-			}
-		}
-
-		dst_len =
-			(src_len % FCS_AES_CRYPT_BLOCK_SIZE) ?
-				(FCS_OSAL_U32)(src_len /
-						FCS_AES_CRYPT_BLOCK_SIZE + 1) *
-					FCS_AES_CRYPT_BLOCK_SIZE :
-				(FCS_OSAL_U32)src_len;
-		dst = (FCS_OSAL_CHAR *)malloc(dst_len);
-		if (!dst) {
-			fprintf(stderr, "Failed to allocate memory for kdk buffer\n");
-			free(src);
-			if (iv)
-				free(iv);
-			if (block_mode == FCS_AES_BLOCK_MODE_GCM ||
-			    block_mode == FCS_AES_BLOCK_MODE_GHASH)
-				free(aad);
-			return -ENOMEM;
-		}
-
-		memset(dst, 0, dst_len);
-
 		aes_req.crypt_mode = crypt_mode;
 		aes_req.block_mode = block_mode;
 		aes_req.iv_source = FCS_AES_IV_SOURCE_EXTERNAL;
-		aes_req.iv = iv;
-		aes_req.iv_len = iv_len;
-		aes_req.tag = tag;
-		aes_req.tag_len = tag_len;
-		aes_req.aad_len = aad_len;
-		aes_req.aad = aad;
-		aes_req.input = src;
-		aes_req.ip_len = src_len;
-		aes_req.output = dst;
-		aes_req.op_len = &dst_len;
+		aes_req.filename = filename;
+		aes_req.outfilename = outfilename;
+		aes_req.iv_file = iv_file;
+		aes_req.tag_file = tag_file;
+		aes_req.aad_file = aad_file;
 
-		printf("AES mode: %d ENC/DEC: %d tag_len: %d aad_len: %d src_len: %d dst_len: %d\n",
-			block_mode, crypt_mode, tag_len, aad_len, src_len, dst_len);
-
-		ret = fcs_aes_crypt(session_uuid, keyid, context_id, &aes_req);
+		ret = fcs_aes_crypt_streaming(session_uuid, keyid, context_id,
+					      &aes_req);
 		if (ret) {
-			free(src);
-			if (iv)
-				free(iv);
-			free(dst);
-			if (block_mode == FCS_AES_BLOCK_MODE_GCM ||
-			    block_mode == FCS_AES_BLOCK_MODE_GHASH)
-				free(aad);
-
+			fprintf(stderr, "AES crypt failed: %d\n", ret);
 			return ret;
-		}
-
-		ret = store_buffer_to_file(outfilename, dst, dst_len);
-		if (ret < 0) {
-			fprintf(stderr,
-				"Failed to store AES Crypt to file: %d\n", ret);
-			free(src);
-			if (iv)
-				free(iv);
-			free(dst);
-			if (block_mode == FCS_AES_BLOCK_MODE_GCM ||
-			    block_mode == FCS_AES_BLOCK_MODE_GHASH)
-				free(aad);
-
-			return ret;
-		}
-
-		if (crypt_mode == FCS_AES_ENCRYPT &&
-			(block_mode == FCS_AES_BLOCK_MODE_GCM ||
-				block_mode == FCS_AES_BLOCK_MODE_GHASH)) {
-			ret = store_buffer_to_file(tag_file, tag, CRYPTO_AES_GCM_TAG_LEN);
-		}
-
-		if (iv)
-			free(iv);
-		free(src);
-		free(dst);
-
-		if (block_mode == FCS_AES_BLOCK_MODE_GCM ||
-			block_mode == FCS_AES_BLOCK_MODE_GHASH) {
-			if (aad)
-				free(aad);
-			free(tag);
 		}
 
 		VERBOSE_PRINT("AES Crypt successful\n");
@@ -2219,77 +2009,22 @@ int main(int argc, char *argv[])
 		break;
 
 	case FCS_DEV_CRYPTO_GET_DIGEST_CMD:
-		if (!filename || !outfilename) {
-			fprintf(stderr, "Missing input or output filename");
-			return -EINVAL;
-		}
-
 		if (is_session_id_valid(session_uuid)) {
 			fprintf(stderr, "Session ID Invalid\n");
 			return -EINVAL;
 		}
 
-		file_size = get_buffer_size_from_file(filename);
-		if (file_size == 0) {
-			fprintf(stderr, "File: %s empty\n", filename);
-			return -EINVAL;
-		} else if (file_size < 0) {
-			return file_size;
-		}
+		digest_req.sha_op_mode = sha_op_mode;
+		digest_req.sha_digest_sz = size;
+		digest_req.filename = filename;
+		digest_req.outfilename = outfilename;
 
-		src_len = file_size;
-
-		/* Allocate memory to read input file */
-		src = (FCS_OSAL_CHAR *)calloc(src_len, sizeof(FCS_OSAL_U8));
-		if (!src) {
-			fprintf(stderr, "can't calloc buffer for %s:  %s\n",
-				filename, strerror(errno));
-			return -ENOMEM;
-		}
-
-		ret = load_buffer_from_file(filename, src);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to load input file: %d\n", ret);
-			free(src);
-			return ret;
-		}
-
-		dst = (FCS_OSAL_CHAR *)calloc(CRYPTO_DIGEST_MAX_SZ,
-					      sizeof(FCS_OSAL_U8));
-		if (!dst) {
-			fprintf(stderr, "can't calloc buffer for %s:  %s\n",
-				outfilename, strerror(errno));
-			free(src);
-			return -ENOMEM;
-		}
-
-		get_digest_req.sha_op_mode = sha_op_mode;
-		get_digest_req.sha_digest_sz = size;
-		get_digest_req.src = src;
-		get_digest_req.src_len = src_len;
-		get_digest_req.digest = dst;
-		get_digest_req.digest_len = &dst_len;
-
-		ret = fcs_get_digest(session_uuid, context_id, keyid,
-				     &get_digest_req);
+		ret = fcs_get_digest_streaming(session_uuid, keyid, context_id,
+					 &digest_req);
 		if (ret) {
-			free(src);
-			free(dst);
+			fprintf(stderr, "Get digest failed: %d\n", ret);
 			return ret;
 		}
-
-		ret = store_buffer_to_file(outfilename, dst, dst_len);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to store digest to file: %d\n",
-				ret);
-			free(src);
-			free(dst);
-			return ret;
-		}
-
-		free(src);
-		free(dst);
-
 		VERBOSE_PRINT("Get digest successful\n");
 		break;
 
@@ -2319,86 +2054,18 @@ int main(int argc, char *argv[])
 			return -EINVAL;
 		}
 
-		file_size = get_buffer_size_from_file(file_name[0]);
-		if (file_size == 0) {
-			fprintf(stderr, "File: %s empty\n", file_name[0]);
-			return -EINVAL;
-		} else if (file_size < 0) {
-			return file_size;
-		}
+		mac_verify_req_streaming.op_mode = sha_op_mode;
+		mac_verify_req_streaming.dig_sz = size;
+		mac_verify_req_streaming.filename1 = file_name[0];
+		mac_verify_req_streaming.filename2 = file_name[1];
+		mac_verify_req_streaming.outfilename = outfilename;
 
-		input_sz0 = file_size;
-
-		file_size = get_buffer_size_from_file(file_name[1]);
-		if (file_size == 0) {
-			fprintf(stderr, "File: %s empty\n", file_name[1]);
-			return -EINVAL;
-		} else if (file_size < 0) {
-			return file_size;
-		}
-
-		input_sz1 = file_size;
-		input_sz = input_sz0 + input_sz1;
-
-		src = (FCS_OSAL_CHAR *)malloc(input_sz * sizeof(FCS_OSAL_CHAR));
-		if (!src) {
-			fprintf(stderr, "can't malloc buffer for %s:  %s\n",
-				file_name[0], strerror(errno));
-			return -ENOMEM;
-		}
-
-		ret = load_buffer_from_file(file_name[0], src);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to load buffer from file: %d\n",
-				ret);
-			free(src);
-			return ret;
-		}
-
-		ret = load_buffer_from_file(file_name[1], src + input_sz0);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to load buffer from file: %d\n",
-				ret);
-			free(src);
-			return ret;
-		}
-
-		dst = (FCS_OSAL_CHAR *)malloc(out_sz);
-		if (!dst) {
-			fprintf(stderr, "can't malloc buffer for %s:  %s\n",
-				outfilename, strerror(errno));
-			free(src);
-			return -ENOMEM;
-		}
-
-		mac_verify_req.op_mode = sha_op_mode;
-		mac_verify_req.dig_sz = size;
-		mac_verify_req.src = src;
-		mac_verify_req.src_sz = input_sz;
-		mac_verify_req.dst = dst;
-		mac_verify_req.dst_sz = &out_sz;
-		mac_verify_req.user_data_sz = input_sz0;
-
-		ret = fcs_mac_verify(session_uuid, context_id, keyid,
-				     &mac_verify_req);
+		ret = fcs_mac_verify_streaming(session_uuid, keyid,
+					 context_id, &mac_verify_req_streaming);
 		if (ret) {
-			free(src);
-			free(dst);
+			fprintf(stderr, "MAC verify failed: %d\n", ret);
 			return ret;
 		}
-
-		ret = store_buffer_to_file(outfilename, dst, out_sz);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to store digest to file: %d\n",
-				ret);
-			free(src);
-			free(dst);
-			return ret;
-		}
-
-		free(src);
-		free(dst);
-
 		VERBOSE_PRINT("MAC verification successful\n");
 		break;
 
@@ -3237,73 +2904,15 @@ int main(int argc, char *argv[])
 			return -EINVAL;
 		}
 
-		file_size = get_buffer_size_from_file(filename);
-		if (file_size == 0) {
-			fprintf(stderr, "File: %s empty\n", filename);
-			return -EINVAL;
-		} else if (file_size < 0) {
-			return file_size;
-		}
-
-		src_len = file_size;
-
-		/* Allocate memory to read inputdata from file */
-		src = (FCS_OSAL_CHAR *)calloc(src_len, sizeof(FCS_OSAL_U8));
-		if (!src) {
-			fprintf(stderr, "can't calloc buffer for %s:  %s\n",
-				filename, strerror(errno));
-			return -ENOMEM;
-		}
-
-		ret = load_buffer_from_file(filename, src);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to load input data from file: %d\n",
-				ret);
-			free(src);
+		ret = fcs_ecdsa_data_sign(session_uuid, context_id, keyid,
+					  ecc_curve, filename, outfilename);
+		if (ret)
 			return ret;
-		}
-
-		dst_len = ECDSA_SIGNATURE_MAX_SZ;
-
-		dst = (FCS_OSAL_CHAR *)calloc(dst_len, sizeof(FCS_OSAL_U8));
-		if (!dst) {
-			fprintf(stderr, "can't calloc buffer for %s:  %s\n",
-				outfilename, strerror(errno));
-			free(src);
-			return -ENOMEM;
-		}
-
-		ecdsa_req.ecc_curve = ecc_curve;
-		ecdsa_req.src = src;
-		ecdsa_req.src_len = src_len;
-		ecdsa_req.dst = dst;
-		ecdsa_req.dst_len = &dst_len;
-
-		ret = fcs_ecdsa_sha2_data_sign(session_uuid, context_id, keyid,
-					       &ecdsa_req);
-		if (ret) {
-			free(src);
-			free(dst);
-			return ret;
-		}
-
-		ret = store_buffer_to_file(outfilename, dst, dst_len);
-		if (ret < 0) {
-			free(src);
-			free(dst);
-			fprintf(stderr, "Failed to store ECDSA SHA2 data sign: %d\n",
-				ret);
-			return ret;
-		}
-
-		free(src);
-		free(dst);
 
 		VERBOSE_PRINT("ECDSA SHA2 data signing successful\n");
 		break;
 
 	case FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_VERIFY_CMD:
-
 		if (!filename_list || !outfilename) {
 			fprintf(stderr, "Missing input file list or output filename\n");
 			return -EINVAL;
@@ -3314,7 +2923,6 @@ int main(int argc, char *argv[])
 			return -EINVAL;
 		}
 
-		/* parse to data and signature binary file */
 		file_name[file_index] = strtok(filename_list, "#");
 		while (file_name[file_index]) {
 			file_index++;
@@ -3329,151 +2937,21 @@ int main(int argc, char *argv[])
 			return -EINVAL;
 		}
 
-		file_size = get_buffer_size_from_file(file_name[0]);
-		if (file_size == 0) {
-			fprintf(stderr, "File: %s empty\n", file_name[0]);
-			return -EINVAL;
-		} else if (file_size < 0) {
-			return file_size;
-		}
+		ecdsa_data_verify.ecc_curve = ecc_curve;
+		ecdsa_data_verify.src_file = file_name[0];
+		ecdsa_data_verify.signature_file = file_name[1];
+		ecdsa_data_verify.pubkey_file = file_name[2];
+		ecdsa_data_verify.outfilename = outfilename;
 
-		src_len = file_size;
-
-		file_size = get_buffer_size_from_file(file_name[1]);
-		if (file_size == 0) {
-			fprintf(stderr, "File: %s empty\n", file_name[1]);
-			return -EINVAL;
-		} else if (file_size < 0) {
-			return file_size;
-		}
-
-		signature_len = file_size;
-
-		src = (FCS_OSAL_CHAR *)calloc(src_len, sizeof(FCS_OSAL_U8));
-		if (!src) {
-			fprintf(stderr, "can't calloc buffer for %s:  %s\n",
-				file_name[0], strerror(errno));
-			return -ENOMEM;
-		}
-
-		signature = (FCS_OSAL_CHAR *)calloc(signature_len,
-						    sizeof(FCS_OSAL_CHAR));
-		if (!signature) {
-			fprintf(stderr, "can't calloc buffer for %s:  %s\n",
-				file_name[1], strerror(errno));
-			free(src);
-			return -ENOMEM;
-		}
-
-		ret = load_buffer_from_file(file_name[0], src);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to load buffer from file: %d\n", ret);
-			free(src);
-			free(signature);
-			return ret;
-		}
-
-		ret = load_buffer_from_file(file_name[1], signature);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to load buffer from file: %d\n", ret);
-			free(src);
-			free(signature);
-			return ret;
-		}
-
-		dst = (FCS_OSAL_CHAR *)calloc(out_sz, sizeof(FCS_OSAL_U8));
-		if (!dst) {
-			fprintf(stderr, "can't calloc buffer for %s:  %s\n", outfilename,
-				strerror(errno));
-			free(src);
-			free(signature);
-			return -ENOMEM;
-		}
-
-		if (keyid == 0) {
-			file_size = get_buffer_size_from_file(file_name[2]);
-			if (file_size == 0) {
-				fprintf(stderr, "File: %s empty\n",
-					file_name[2]);
-				free(src);
-				free(dst);
-				free(signature);
-				return -EINVAL;
-			} else if (file_size < 0) {
-				free(src);
-				free(dst);
-				free(signature);
-				return file_size;
-			}
-
-			pubkey_len = file_size;
-
-			pubkey = (FCS_OSAL_CHAR *)calloc(pubkey_len,
-							 sizeof(FCS_OSAL_U8));
-			if (!pubkey) {
-				fprintf(stderr, "can't calloc buffer for %s:  %s\n",
-					file_name[2], strerror(errno));
-				free(src);
-				free(dst);
-				free(signature);
-				return -ENOMEM;
-			}
-
-			ret = load_buffer_from_file(file_name[2], pubkey);
-			if (ret < 0) {
-				fprintf(stderr, "Failed to load buffer from file: %d\n",
-					ret);
-				free(src);
-				free(dst);
-				free(signature);
-				free(pubkey);
-				return ret;
-			}
-		}
-
-		ecdsa_verify_req.ecc_curve = ecc_curve;
-		ecdsa_verify_req.src = src;
-		ecdsa_verify_req.src_len = src_len;
-		ecdsa_verify_req.signature = signature;
-		ecdsa_verify_req.signature_len = signature_len;
-		ecdsa_verify_req.pubkey = pubkey;
-		ecdsa_verify_req.pubkey_len = pubkey_len;
-		ecdsa_verify_req.dst = dst;
-		ecdsa_verify_req.dst_len = &out_sz;
-
-		ret = fcs_ecdsa_sha2_data_verify(session_uuid, context_id,
-						 keyid, &ecdsa_verify_req);
+		ret = fcs_ecdsa_data_verify(session_uuid, context_id, keyid,
+					    &ecdsa_data_verify);
 		if (ret) {
-			free(src);
-			free(dst);
-			free(signature);
-			if (keyid == 0)
-				free(pubkey);
-			return ret;
-		}
-
-		ret = store_buffer_to_file(outfilename, dst, out_sz);
-		if (ret < 0) {
-			fprintf(stderr, "Failed to store ECDSA data verify %d\n",
+			fprintf(stderr, "ECDSA data verification failed: %d\n",
 				ret);
-			free(src);
-			free(dst);
-			free(signature);
-			if (keyid == 0)
-				free(pubkey);
 			return ret;
 		}
 
-		if (dst[0] != 0x0d && dst[1] != 0x90)
-			fprintf(stderr, "ECDSA SHA2 Data verify failed\n");
-		else
-			VERBOSE_PRINT("ECDSA SHA2 Data verify successful\n");
-
-		free(src);
-		free(dst);
-		free(signature);
-		if (keyid == 0)
-			free(pubkey);
+		VERBOSE_PRINT("ECDSA SHA2 Data verify successful\n");
 		break;
 
 	case FCS_DEV_VALIDATE_REQUEST_CMD:

@@ -69,6 +69,22 @@ struct fcs_ecdsa_verify_req {
 	FCS_OSAL_U32 *dst_len;
 };
 
+/**
+ * ECDSA hash verify request structure streaming
+ */
+struct fcs_ecdsa_verify_req_streaming {
+	/* ECC curve */
+	FCS_OSAL_U32 ecc_curve;
+	/* Source buffer file */
+	FCS_OSAL_CHAR *src_file;
+	/* Signature file*/
+	FCS_OSAL_CHAR *signature_file;
+	/* Public key file */
+	FCS_OSAL_CHAR *pubkey_file;
+	/* Output file */
+	FCS_OSAL_CHAR *outfilename;
+};
+
 /**\
  * ECDA hash sign request structure
  */
@@ -142,6 +158,20 @@ struct fcs_digest_get_req {
 };
 
 /**
+ * Get digest request structure (streaming)
+ */
+struct fcs_digest_req_streaming {
+	/* Op mode */
+	FCS_OSAL_U32 sha_op_mode;
+	/* Digest size */
+	FCS_OSAL_U32 sha_digest_sz;
+	/* Pointer to input source file */
+	FCS_OSAL_CHAR *filename;
+	/* Pointer to output file */
+	FCS_OSAL_CHAR *outfilename;
+};
+
+/**
  * Mac verify request structure
  */
 struct fcs_mac_verify_req {
@@ -160,6 +190,22 @@ struct fcs_mac_verify_req {
 	/* User data size */
 	FCS_OSAL_U32 user_data_sz;
 };
+
+/**
+ * Mac verify request structure
+ */
+struct fcs_mac_verify_req_streaming {
+	/* Op mode */
+	FCS_OSAL_U32 op_mode;
+	/* Digest size */
+	FCS_OSAL_U32 dig_sz;
+	/* Pointer to input source file 1 */
+	FCS_OSAL_CHAR *filename1;
+	/* Pointer to input source file 2 */
+	FCS_OSAL_CHAR *filename2;
+	/* Pointer to output file */
+	FCS_OSAL_CHAR *outfilename;
+ };
 
 /**
  * AES request structure
@@ -191,6 +237,25 @@ struct fcs_aes_req {
 	FCS_OSAL_CHAR *output;
 	/* Pointer to output buffer length */
 	FCS_OSAL_U32 *op_len;
+};
+
+struct fcs_aes_req_streaming {
+	/* AES cryption mode */
+	FCS_OSAL_U32 crypt_mode;
+	/* Block mode */
+	FCS_OSAL_U32 block_mode;
+	/* IV source: Internal or External */
+	FCS_OSAL_U32 iv_source;
+	/* Pointer to input source file */
+	FCS_OSAL_CHAR *filename;
+	/* Pointer to IV file */
+	FCS_OSAL_CHAR *iv_file;
+	/* Pointer to AAD file */
+	FCS_OSAL_CHAR *aad_file;
+	/* Pointer to Tag file */
+	FCS_OSAL_CHAR *tag_file;
+	/* Pointer to output file */
+	FCS_OSAL_CHAR *outfilename;
 };
 
 /**
@@ -784,12 +849,118 @@ FCS_OSAL_INT fcs_mbox_send_cmd(FCS_OSAL_U32 mbox_cmd_code, FCS_OSAL_CHAR *src,
 	FCS_OSAL_U32 *dst_len);
 
 /**
+ * @brief Signs data using the ECDSA algorithm with SHA-2
+ *
+ * This function signs the data in the provided input file using the ECDSA
+ * algorithm with SHA-2. The signing operation uses the key and context
+ * specified in the cryptographic session, and the resulting signature is saved
+ * to the specified output file.
+ *
+ * @param session_uuid A pointer to the session UUID that identifies the cryptographic session.
+ * @param context_id Context ID.
+ * @param key_id Key ID.
+ * @param ecc_algo The elliptic curve cryptography algorithm to be used (e.g., NIST_P256).
+ * @param input_file Input file that contains the data to be signed.
+ * @param output_file Output file where the signature will be saved.
+ *
+ * @return An integer returns 0 indicating the success otherwise failure of the
+ * operation.
+ */
+FCS_OSAL_INT
+fcs_ecdsa_data_sign(FCS_OSAL_UUID *session_uuid, FCS_OSAL_U32 context_id,
+			 FCS_OSAL_U32 key_id, FCS_OSAL_INT ecc_algo,
+			 FCS_OSAL_CHAR *input_file, FCS_OSAL_CHAR *output_file);
+
+/**
+ * @brief Verifies the ECDSA signature of the data in the specified file.
+ *
+ * This function verifies the ECDSA signature of the data in the specified
+ * input file using the public key and context specified in the cryptographic
+ * session. The verification result is saved to the specified output file.
+ *
+ * @param session_uuid A pointer to the session UUID that identifies the cryptographic session.
+ * @param context_id Context ID.
+ * @param key_id Key ID.
+ * @param req ECDSA data verification request structure.
+ *
+ * @return An integer returns 0 indicating the success otherwise failure of the
+ * operation.
+ */
+FCS_OSAL_INT fcs_ecdsa_data_verify(FCS_OSAL_UUID *session_uuid,
+				   FCS_OSAL_U32 context_id, FCS_OSAL_U32 key_id,
+				   struct fcs_ecdsa_verify_req_streaming *req);
+
+/**
+ * @brief Performs AES encryption/decryption using streaming mode.
+ *
+ * This function performs AES encryption or decryption using streaming mode
+ * for the specified session UUID, key ID, context ID, and request structure.
+ *
+ * @param session_uuid Pointer to the session UUID.
+ * @param key_id Key ID.
+ * @param context_id Context ID.
+ * @param req request structure
+ *
+ * @return An integer returns 0 indicating the success otherwise failure of the
+ * operation.
+ */
+FCS_OSAL_INT fcs_aes_crypt_streaming(FCS_OSAL_UUID *session_uuid,
+				     FCS_OSAL_U32 key_id,
+				     FCS_OSAL_U32 context_id,
+				     struct fcs_aes_req_streaming *req);
+
+/**
+ * @brief Performs digest computation using streaming mode.
+ *
+ * This function performs digest computation for the specified session UUID,
+ * key ID, context ID, and request structure.
+ *
+ * @param session_uuid Pointer to the session UUID.
+ * @param key_id Key ID.
+ * @param context_id Context ID.
+ * @param req request structure
+ *
+ * @return An integer returns 0 indicating the success otherwise failure of the
+ * operation.
+ */
+FCS_OSAL_INT fcs_get_digest_streaming(FCS_OSAL_UUID *session_uuid,
+				      FCS_OSAL_U32 keyid,
+				      FCS_OSAL_U32 context_id,
+				      struct fcs_digest_req_streaming *req);
+
+/**
+ * @brief Verifies the MAC using streaming mode.
+ *
+ * This function verifies the MAC for the specified session UUID, context ID,
+ * key ID, and request structure.
+ *
+ * @param session_uuid Pointer to the session UUID.
+ * @param key_id Key ID.
+ * @param context_id Context ID.
+ * @param req request structure
+ *
+ * @return An integer returns 0 indicating the success otherwise failure of the
+ * operation.
+ */
+FCS_OSAL_INT
+fcs_mac_verify_streaming(FCS_OSAL_UUID *session_uuid,
+			FCS_OSAL_U32 key_id, FCS_OSAL_U32 context_id,
+			struct fcs_mac_verify_req_streaming *req);
+
+/**
  * @brief Initializes the FCS library.
  *
  * @param loglevel set log level
  * @return 0 on success, negative value on error.
  */
 FCS_OSAL_INT libfcs_init(FCS_OSAL_CHAR *loglevel);
+
+/**
+ * @brief Get the FCS library version and git SHA.
+ *
+ * @return Pointer to a static string with version and git SHA.
+ */
+const char *fcs_get_version(void);
 
 #ifdef __cplusplus
 }

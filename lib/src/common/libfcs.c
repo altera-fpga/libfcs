@@ -13,8 +13,26 @@
 #include <libfcs_logging.h>
 #include <string.h>
 #include <errno.h>
+#include "fcs_version.h"
 
 #define CRYPTO_HKDF_MAX_SZ 384
+
+/* Max size of crypto */
+#define CRYPTO_MAX_SZ 0x400000
+
+/* Minimum final stage size for sending payload */
+#define MIN_FINAL_SIZE 8
+
+#define FCS_SHA256_DIGEST_SIZE 32
+#define FCS_SHA384_DIGEST_SIZE 48
+#define FCS_SHA512_DIGEST_SIZE 64
+#define DIGEST_SERVICE_MIN_DATA_SIZE 8
+#define MAC_VERIFY_UPDATE 1
+#define MAC_VERIFY_FINAL 2
+#define ECDSA_VERIFY_UPDATE 1
+#define ECDSA_VERIFY_FINAL 2
+#define ECDSA_RESPONSE_SIZE 4
+#define ECDSA_RESPONSE_HEADER_SIZE 12
 
 /**
  * @brief Enumeration for the state of the FCS library.
@@ -43,6 +61,11 @@ static struct fcs_context ctx;
  * @brief Global interface for the OSAL functions.
  */
 static struct libfcs_osal_intf *intf;
+
+/**
+ * @brief Global interface for the file system operations.
+ */
+static struct fcs_filesys_intf filesys_intf;
 
 /**
  * @brief Macro to lock the mutex.
@@ -78,6 +101,13 @@ FCS_OSAL_INT libfcs_init(FCS_OSAL_CHAR *log_level)
 	ret = fcs_logging_init(log_level);
 	if (ret != 0) {
 		FCS_LOG_ERR("Error in initializing logging");
+		return ret;
+	}
+
+	/* Initialize fs ops structures */
+	ret = fcs_filesys_init(&filesys_intf);
+	if (ret != 0) {
+		FCS_LOG_ERR("Unable to initialize fs ops");
 		return ret;
 	}
 
@@ -3218,4 +3248,1470 @@ FCS_OSAL_INT fcs_mbox_send_cmd(FCS_OSAL_U32 mbox_cmd_code, FCS_OSAL_CHAR *src,
 	}
 
 	return ret;
+}
+
+FCS_OSAL_INT
+fcs_ecdsa_data_sign(FCS_OSAL_UUID *session_uuid, FCS_OSAL_U32 context_id,
+		    FCS_OSAL_U32 key_id, FCS_OSAL_INT ecc_algo,
+		    FCS_OSAL_CHAR *input_file, FCS_OSAL_CHAR *output_file)
+{
+	FCS_OSAL_INT ret = 0;
+	struct fcs_cmd_context ecdsa_ctx;
+	FCS_OSAL_FILE *ecdsa_file_handle = NULL, *ecdsa_outfile_handle = NULL;
+	FCS_OSAL_INT error_code = 0;
+	FCS_OSAL_CHAR *buffer = NULL;
+	FCS_OSAL_SIZE bytes_read = 0, chunk_size = 0;
+	FCS_OSAL_U32 dst_len = 0;
+	FCS_OSAL_INT bytes_written = 0;
+	FCS_OSAL_SIZE remaining_size = 0, file_size = 0;
+	FCS_OSAL_BOOL is_update = true;
+
+	if (ctx.state != initialized) {
+		FCS_LOG_ERR("FCS library not initialized\n");
+		return -EINVAL;
+	}
+
+	if (!session_uuid) {
+		FCS_LOG_ERR("Invalid argument: session_uuid is NULL\n");
+		return -EINVAL;
+	}
+
+	if (ecc_algo != FCS_ECC_CURVE_NIST_P256 &&
+	    ecc_algo != FCS_ECC_CURVE_NIST_P384 &&
+	    ecc_algo != FCS_ECC_CURVE_BRAINPOOL_P256 &&
+	    ecc_algo != FCS_ECC_CURVE_BRAINPOOL_P384) {
+		FCS_LOG_ERR("Invalid argument: ecc_curve\n");
+		return -EINVAL;
+	}
+
+	if (!input_file) {
+		FCS_LOG_ERR("Source data file missing");
+		return -EINVAL;
+	}
+
+	if (!output_file) {
+		FCS_LOG_ERR("Output file missing");
+		return -EINVAL;
+	}
+
+	if (!intf->ecdsa_data_sign_init) { /**add other check as well */
+		FCS_LOG_ERR("ECDSA data sign API not available\n");
+		return -ENXIO;
+	}
+
+	if (MUTEX_LOCK() != 0) {
+		FCS_LOG_ERR("Mutex lock failed in fcs ecdsa data sign command\n");
+		return -EAGAIN;
+	}
+
+	FCS_LOG_DBG("ECDSA SHA2 data sign: init\n");
+
+	memcpy(ecdsa_ctx.ecdsa_sha2_data_sign.suuid, session_uuid,
+	       FCS_OSAL_UUID_SIZE);
+
+	ecdsa_ctx.ecdsa_sha2_data_sign.context_id = context_id;
+	ecdsa_ctx.ecdsa_sha2_data_sign.key_id = key_id;
+	ecdsa_ctx.ecdsa_sha2_data_sign.ecc_curve = ecc_algo;
+
+	ret = intf->ecdsa_data_sign_init(&ecdsa_ctx);
+	if (ret != 0) {
+		FCS_LOG_ERR("Error in requesting ECDSA data sign init  %s\n",
+			    strerror(errno));
+	} else if (error_code) {
+		ret = error_code;
+		FCS_LOG_ERR("Failed to request ECDSA data sign init with sdm error code = %x\n",
+			    error_code);
+
+		if (MUTEX_UNLOCK() != 0) {
+			FCS_LOG_ERR("Mutex unlock failed in fcs ecdsa data sign command\n");
+			return -EAGAIN;
+		}
+		return ret;
+	};
+
+	ecdsa_file_handle = filesys_intf.open(input_file, FCS_FILE_READ);
+	if (!ecdsa_file_handle) {
+		FCS_LOG_ERR("Error in opening input file %s\n",
+			    strerror(errno));
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	ret = filesys_intf.get_size(ecdsa_file_handle, &file_size);
+	if (ret != 0 || file_size == 0) {
+		FCS_LOG_ERR("Failed to get file size: ret: %d file_size: %d\n",
+			    ret, file_size);
+		goto close_src_file;
+	}
+
+	remaining_size = file_size;
+
+	ecdsa_outfile_handle = filesys_intf.open(output_file, FCS_FILE_WRITE);
+	if (!ecdsa_outfile_handle) {
+		FCS_LOG_ERR("Error in opening output file %s\n",
+			    strerror(errno));
+		ret = -EINVAL;
+		goto close_src_file;
+	}
+
+	buffer = fcs_malloc(remaining_size > CRYPTO_MAX_SZ ?
+			    CRYPTO_MAX_SZ : remaining_size);
+	if (!buffer) {
+		FCS_LOG_ERR("Failed to allocate memory for buffer\n");
+		ret = -ENOMEM;
+		goto close_out_file;
+	}
+
+	ecdsa_ctx.error_code_addr = &error_code;
+
+	dst_len = CRYPTO_MAX_SZ;
+
+	ecdsa_ctx.ecdsa_sha2_data_sign.dst = fcs_malloc(dst_len);
+	if (!ecdsa_ctx.ecdsa_sha2_data_sign.dst) {
+		FCS_LOG_ERR("Failed to allocate memory for final destination buffer\n");
+		ret = -ENOMEM;
+		goto free_buffer;
+	}
+
+	ecdsa_ctx.ecdsa_sha2_data_sign.dst_len = &dst_len;
+
+	while (remaining_size > 0) {
+		if (remaining_size > CRYPTO_MAX_SZ) {
+			chunk_size = CRYPTO_MAX_SZ;
+			is_update = true;
+		} else {
+			chunk_size = remaining_size;
+			is_update = false;
+		}
+
+		bytes_read = filesys_intf.read(buffer, chunk_size, ecdsa_file_handle);
+		if (bytes_read <= 0) {
+			FCS_LOG_ERR("Error reading input file\n");
+			ret = -EIO;
+			goto free_dst;
+		}
+
+		ecdsa_ctx.ecdsa_sha2_data_sign.src = buffer;
+		ecdsa_ctx.ecdsa_sha2_data_sign.src_len = bytes_read;
+
+		if (is_update)
+			ret = intf->ecdsa_data_sign_update(&ecdsa_ctx);
+		else
+			ret = intf->ecdsa_data_sign_final(&ecdsa_ctx);
+
+		if (ret != 0) {
+			FCS_LOG_ERR("Error in ECDSA data sign update stage\n");
+			goto free_dst;
+		}
+		if (error_code)
+			goto out;
+
+		remaining_size -= bytes_read;
+		if (remaining_size == 0) {
+			bytes_written = filesys_intf.write(
+				ecdsa_ctx.ecdsa_sha2_data_sign.dst,
+				(FCS_OSAL_SIZE)
+					dst_len,
+					ecdsa_outfile_handle);
+			if (bytes_written <= 0) {
+				ret = -EIO;
+				FCS_LOG_ERR("Error writing to output file\n");
+				goto free_dst;
+			}
+			if (error_code)
+				goto out;
+
+			FCS_LOG_DBG("ECDSA data sign completed successfully\n");
+		}
+	}
+out:
+	if (error_code) {
+		FCS_LOG_ERR("Failed to request ECDSA data sign with sdm error code = 0x%x\n",
+			error_code);
+		ret = error_code;
+	}
+
+free_dst:
+	fcs_osal_free(ecdsa_ctx.ecdsa_sha2_data_sign.dst);
+	ecdsa_ctx.ecdsa_sha2_data_sign.dst = NULL;
+	ecdsa_ctx.ecdsa_sha2_data_sign.dst_len = NULL;
+free_buffer:
+	fcs_osal_free(buffer);
+	buffer = NULL;
+close_out_file:
+	filesys_intf.close(ecdsa_outfile_handle);
+	ecdsa_outfile_handle = NULL;
+close_src_file:
+	filesys_intf.close(ecdsa_file_handle);
+	ecdsa_file_handle = NULL;
+unlock:
+	if (MUTEX_UNLOCK() != 0) {
+		FCS_LOG_ERR("Mutex unlock failed in fcs ecdsa data sign command\n");
+		return -EAGAIN;
+	}
+
+	return ret;
+}
+
+FCS_OSAL_INT fcs_ecdsa_data_verify(FCS_OSAL_UUID *session_uuid,
+				   FCS_OSAL_U32 context_id, FCS_OSAL_U32 key_id,
+				   struct fcs_ecdsa_verify_req_streaming *req)
+{
+	FCS_OSAL_INT ret = 0;
+	struct fcs_cmd_context ecdsa_ctx;
+	FCS_OSAL_INT error_code = 0;
+	FCS_OSAL_FILE *ecdsa_file_handle = NULL;
+	FCS_OSAL_FILE *signature_file_handle = NULL, *ecdsa_rsp_handle = NULL;
+	FCS_OSAL_FILE *pubkey_file_handle = NULL;
+	FCS_OSAL_U32 remaining_sz = 0, command = 0, bytes_read;
+	FCS_OSAL_SIZE src_file_size = 0, pubkey_len = 0, signature_len = 0;
+	FCS_OSAL_U32 dst_len = ECDSA_RESPONSE_SIZE + ECDSA_RESPONSE_HEADER_SIZE;
+	FCS_OSAL_INT bytes_written = 0;
+
+	if (ctx.state != initialized) {
+		FCS_LOG_ERR("FCS library not initialized\n");
+		return -EINVAL;
+	}
+
+	if (!session_uuid) {
+		FCS_LOG_ERR("Invalid argument: session_uuid is NULL\n");
+		return -EINVAL;
+	}
+
+	if (!req->src_file || !req->signature_file ||
+	    (key_id == 0 && !req->pubkey_file)) {
+		FCS_LOG_ERR("Missing input or signature or public key file\n");
+		return -EINVAL;
+	}
+
+	if (!req->outfilename) {
+		FCS_LOG_ERR("Missing output file name\n");
+		return -EINVAL;
+	}
+
+	if (req->ecc_curve != FCS_ECC_CURVE_NIST_P256 &&
+	    req->ecc_curve != FCS_ECC_CURVE_NIST_P384 &&
+	    req->ecc_curve != FCS_ECC_CURVE_BRAINPOOL_P256 &&
+	    req->ecc_curve != FCS_ECC_CURVE_BRAINPOOL_P384) {
+		FCS_LOG_ERR("Invalid argument: ecc_curve\n");
+		return -EINVAL;
+	}
+
+	if (MUTEX_LOCK() != 0) {
+		FCS_LOG_ERR("Mutex lock failed in fcs ecdsa data verify command\n");
+		return -EAGAIN;
+	}
+
+	/* Source file handling */
+	ecdsa_file_handle = filesys_intf.open(req->src_file, FCS_FILE_READ);
+	if (!ecdsa_file_handle) {
+		FCS_LOG_ERR("Error in opening input file %s\n",
+			    strerror(errno));
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	ret = filesys_intf.get_size(ecdsa_file_handle, &src_file_size);
+	if (ret != 0 || src_file_size == 0) {
+		FCS_LOG_ERR("Failed to get file size: ret: %d file_size: %d\n",
+			    ret, src_file_size);
+		goto close_src_file;
+	}
+
+	/* Signature handling */
+	signature_file_handle =
+		filesys_intf.open(req->signature_file, FCS_FILE_READ);
+	if (!signature_file_handle) {
+		FCS_LOG_ERR("Error in opening signature file %s\n",
+			    strerror(errno));
+		ret = -EINVAL;
+		goto close_src_file;
+	}
+	ret = filesys_intf.get_size(signature_file_handle, &signature_len);
+	if (ret != 0 || signature_len == 0) {
+		FCS_LOG_ERR("Failed to get file size: ret: %d file_size: %d\n",
+			    ret, signature_len);
+		goto close_signature_file;
+	}
+
+	remaining_sz = src_file_size + signature_len;
+
+	/* Public key handling */
+	if (key_id == 0) {
+		pubkey_file_handle =
+			filesys_intf.open(req->pubkey_file, FCS_FILE_READ);
+		if (!pubkey_file_handle) {
+			FCS_LOG_ERR("Error in opening public key file %s\n",
+				    strerror(errno));
+			ret = -EINVAL;
+			goto close_signature_file;
+		}
+		ret = filesys_intf.get_size(pubkey_file_handle, &pubkey_len);
+		if (ret != 0 || pubkey_len == 0) {
+			FCS_LOG_ERR("Failed to get file size: ret: %d file_size: %d\n",
+				    ret, pubkey_len);
+			goto close_pubkey_file;
+		}
+
+		FCS_LOG_DBG("Public key length is valid: %d\n", pubkey_len);
+
+		/* remaining size includes source data size, signature
+		 * and public key length
+		 */
+		remaining_sz += pubkey_len;
+
+		FCS_LOG_DBG("Remaining size after adding public key length: %d\n",
+			    remaining_sz);
+	}
+
+	memset(&ecdsa_ctx, 0, sizeof(ecdsa_ctx));
+	ecdsa_ctx.error_code_addr = &error_code;
+
+	/* Allocate memory for source, signature and public key */
+	ecdsa_ctx.ecdsa_sha2_data_verify.src = fcs_malloc(CRYPTO_MAX_SZ);
+	if (!ecdsa_ctx.ecdsa_sha2_data_verify.src) {
+		FCS_LOG_ERR("Failed to allocate memory for source buffer\n");
+		ret = -ENOMEM;
+		goto close_pubkey_file;
+	}
+
+	ecdsa_ctx.ecdsa_sha2_data_verify.signature = fcs_malloc(signature_len);
+	if (!ecdsa_ctx.ecdsa_sha2_data_verify.signature) {
+		FCS_LOG_ERR("Failed to allocate memory for signature buffer\n");
+		ret = -ENOMEM;
+		goto free_src;
+	}
+	ecdsa_ctx.ecdsa_sha2_data_verify.signature_len = signature_len;
+
+	/* Allocate memory for destination buffer */
+	ecdsa_ctx.ecdsa_sha2_data_verify.dst = fcs_malloc(dst_len);
+	if (!ecdsa_ctx.ecdsa_sha2_data_verify.dst) {
+		FCS_LOG_ERR("Failed to allocate memory for destination buffer\n");
+		ret = -ENOMEM;
+		goto free_signature;
+	}
+	ecdsa_ctx.ecdsa_sha2_data_verify.dst_len = &dst_len;
+
+	/* read singnature */
+	bytes_read = filesys_intf.read(
+		ecdsa_ctx.ecdsa_sha2_data_verify.signature,
+		signature_len, signature_file_handle);
+	if (bytes_read <= 0) {
+		FCS_LOG_ERR("Error reading signature file\n");
+		ret = -EIO;
+		goto free_dst;
+	}
+
+	if (!key_id) {
+		ecdsa_ctx.ecdsa_sha2_data_verify.pubkey = fcs_malloc(pubkey_len);
+		if (!ecdsa_ctx.ecdsa_sha2_data_verify.pubkey) {
+			FCS_LOG_ERR("Failed to allocate memory for public key buffer\n");
+			ret = -ENOMEM;
+			goto free_dst;
+		}
+		ecdsa_ctx.ecdsa_sha2_data_verify.pubkey_len = pubkey_len;
+
+		/* read public key */
+		bytes_read = filesys_intf.read(
+			ecdsa_ctx.ecdsa_sha2_data_verify.pubkey,
+			pubkey_len, pubkey_file_handle);
+		if (bytes_read <= 0) {
+			FCS_LOG_ERR("Error reading public key file\n");
+			ret = -EIO;
+			goto free_pubkey;
+		}
+	} else {
+		ecdsa_ctx.ecdsa_sha2_data_verify.pubkey_len = 0;
+		ecdsa_ctx.ecdsa_sha2_data_verify.pubkey = NULL;
+	}
+
+	FCS_LOG_DBG("Data and signature verification in progress...\n");
+
+	/* ECDSA SHA2 data verify: init stage */
+	if (!intf->ecdsa_data_verify_init) {
+		FCS_LOG_ERR("ECDSA data verify API not available\n");
+		ret = -ENXIO;
+		goto free_pubkey;
+	}
+
+	FCS_LOG_DBG("ECDSA data verify: init\n");
+
+	memcpy(ecdsa_ctx.ecdsa_sha2_data_verify.suuid, session_uuid,
+	       FCS_OSAL_UUID_SIZE);
+	ecdsa_ctx.ecdsa_sha2_data_verify.context_id = context_id;
+	ecdsa_ctx.ecdsa_sha2_data_verify.key_id = key_id;
+	ecdsa_ctx.ecdsa_sha2_data_verify.ecc_curve = req->ecc_curve;
+
+	ret = intf->ecdsa_data_verify_init(&ecdsa_ctx);
+	if (ret != 0) {
+		FCS_LOG_ERR("ECDSA data verify init failed with error code: %d\n", ret);
+		goto free_pubkey;
+	}
+	if (error_code) {
+		ret = error_code;
+		FCS_LOG_ERR("Failed to request ECDSA data verify init with sdm error code = 0x%x\n",
+			    error_code);
+		goto free_pubkey;
+	}
+
+	/* handling update and final stages */
+	while (remaining_sz > 0) {
+		if (remaining_sz > CRYPTO_MAX_SZ) {
+			if ((remaining_sz - CRYPTO_MAX_SZ) >=
+			    (MIN_FINAL_SIZE + signature_len + pubkey_len)) {
+				ecdsa_ctx.ecdsa_sha2_data_verify.src_len =
+					CRYPTO_MAX_SZ;
+				ecdsa_ctx.ecdsa_sha2_data_verify.user_data_sz =
+					CRYPTO_MAX_SZ;
+			} else {
+				ecdsa_ctx.ecdsa_sha2_data_verify.src_len =
+					remaining_sz -
+					(MIN_FINAL_SIZE + signature_len +
+					 pubkey_len);
+				ecdsa_ctx.ecdsa_sha2_data_verify.user_data_sz =
+					remaining_sz -
+					(MIN_FINAL_SIZE + signature_len +
+					 pubkey_len);
+			}
+
+			command = ECDSA_VERIFY_UPDATE;
+		} else {
+			ecdsa_ctx.ecdsa_sha2_data_verify.src_len =
+				remaining_sz;
+			ecdsa_ctx.ecdsa_sha2_data_verify.user_data_sz =
+				remaining_sz - (signature_len + pubkey_len);
+
+			command = ECDSA_VERIFY_FINAL;
+		}
+
+		/* Allocate memory and Read source data to verify */
+		bytes_read = filesys_intf.read(
+			ecdsa_ctx.ecdsa_sha2_data_verify.src,
+			ecdsa_ctx.ecdsa_sha2_data_verify.user_data_sz,
+			ecdsa_file_handle);
+		if (bytes_read <= 0) {
+			FCS_LOG_ERR("Error reading input file\n");
+			ret = -EIO;
+			goto free_pubkey;
+		}
+
+		if (command == ECDSA_VERIFY_UPDATE) {
+			ret = intf->ecdsa_data_verify_update(&ecdsa_ctx);
+		} else {
+			ret = intf->ecdsa_data_verify_final(&ecdsa_ctx);
+		}
+		if (ret != 0) {
+			FCS_LOG_ERR("Error in ECDSA data verify final stage\n");
+			goto free_pubkey;
+		}
+		if (error_code) {
+			ret = error_code;
+			FCS_LOG_ERR(
+				"Failed to request ECDSA data verify with sdm error code = 0x%x\n",
+				error_code);
+			goto free_pubkey;
+		}
+
+		remaining_sz -= ecdsa_ctx.ecdsa_sha2_data_verify.src_len;
+	}
+
+	/* Write the final output to the output file */
+	FCS_LOG_DBG("Writing final output to the output file\n");
+
+	ecdsa_rsp_handle = filesys_intf.open(req->outfilename, FCS_FILE_WRITE);
+	if (!ecdsa_rsp_handle) {
+		FCS_LOG_ERR("Error in opening output file %s\n",
+			    strerror(errno));
+		ret = -EINVAL;
+		goto free_pubkey;
+	}
+	/* write the final output to the output file */
+	bytes_written = filesys_intf.write(ecdsa_ctx.ecdsa_sha2_data_verify.dst,
+				 (FCS_OSAL_SIZE)dst_len, ecdsa_rsp_handle);
+	if (bytes_written <= 0) {
+		FCS_LOG_ERR("Error writing to output file\n");
+		goto close_dst_file;
+	}
+
+	if (ecdsa_ctx.ecdsa_sha2_data_verify.dst[0] != 0x0d &&
+	    ecdsa_ctx.ecdsa_sha2_data_verify.dst[1] != 0x90) {
+		FCS_LOG_ERR("ECDSA SHA2 Data verify failed\n");
+		ret = -EIO;
+		goto close_dst_file;
+	}
+
+	FCS_LOG_DBG("ECDSA data verify completed successfully\n");
+
+close_dst_file:
+	filesys_intf.close(ecdsa_rsp_handle);
+	ecdsa_rsp_handle = NULL;
+free_pubkey:
+	if (key_id == 0) {
+		fcs_osal_free(ecdsa_ctx.ecdsa_sha2_data_verify.pubkey);
+		ecdsa_ctx.ecdsa_sha2_data_verify.pubkey = NULL;
+	}
+free_dst:
+	fcs_osal_free(ecdsa_ctx.ecdsa_sha2_data_verify.dst);
+	ecdsa_ctx.ecdsa_sha2_data_verify.dst = NULL;
+free_signature:
+	fcs_osal_free(ecdsa_ctx.ecdsa_sha2_data_verify.signature);
+	ecdsa_ctx.ecdsa_sha2_data_verify.signature = NULL;
+free_src:
+	fcs_osal_free(ecdsa_ctx.ecdsa_sha2_data_verify.src);
+	ecdsa_ctx.ecdsa_sha2_data_verify.src = NULL;
+close_pubkey_file:
+	if (key_id == 0) {
+		filesys_intf.close(pubkey_file_handle);
+		pubkey_file_handle = NULL;
+	}
+close_signature_file:
+	filesys_intf.close(signature_file_handle);
+	signature_file_handle = NULL;
+close_src_file:
+	filesys_intf.close(ecdsa_file_handle);
+	ecdsa_file_handle = NULL;
+unlock:
+	if (MUTEX_UNLOCK() != 0) {
+		FCS_LOG_ERR("Mutex unlock failed in fcs ecdsa data verify command\n");
+		return -EAGAIN;
+	}
+
+	return ret;
+}
+
+FCS_OSAL_INT fcs_get_digest_streaming(FCS_OSAL_UUID *session_uuid,
+				      FCS_OSAL_U32 keyid,
+				      FCS_OSAL_U32 context_id,
+				      struct fcs_digest_req_streaming * req)
+{
+	FCS_OSAL_INT ret = 0;
+	struct fcs_cmd_context digest_ctx;
+	FCS_OSAL_FILE *digest_file_handle = NULL;
+	FCS_OSAL_FILE *digest_outfile_handle = NULL;
+	FCS_OSAL_INT error_code = 0;
+	FCS_OSAL_CHAR *buffer = NULL;
+	FCS_OSAL_SIZE bytes_read = 0, chunk_size = 0;
+	FCS_OSAL_U32 dst_len = 0;
+	FCS_OSAL_SIZE remaining_size = 0, file_size = 0;
+	FCS_OSAL_BOOL is_update = true;
+	FCS_OSAL_INT bytes_written = 0;
+
+	if (ctx.state != initialized) {
+		FCS_LOG_ERR("FCS library not initialized\n");
+		return -EINVAL;
+	}
+
+	if (!session_uuid) {
+		FCS_LOG_ERR("Invalid argument: session_uuid is NULL\n");
+		return -EINVAL;
+	}
+
+	if (!req) {
+		FCS_LOG_ERR("Invalid argument: req is NULL\n");
+		return -EINVAL;
+	}
+
+	if (!req->filename) {
+		FCS_LOG_ERR("Source data file missing");
+		return -EINVAL;
+	}
+
+	if (!req->outfilename) {
+		FCS_LOG_ERR("Output file missing");
+		return -EINVAL;
+	}
+
+	if (req->sha_op_mode != 1 &&
+	    req->sha_op_mode != 2) {
+		FCS_LOG_ERR("Invalid argument: sha_op_mode\n");
+		return -EINVAL;
+	}
+
+	if (req->sha_digest_sz != 0 &&
+	    req->sha_digest_sz != 1 &&
+	    req->sha_digest_sz != 2) {
+		FCS_LOG_ERR("Invalid argument: sha_digest_sz\n");
+		return -EINVAL;
+	}
+
+	if (MUTEX_LOCK() != 0) {
+		FCS_LOG_ERR("Mutex lock failed in fcs digest command\n");
+		return -EAGAIN;
+	}
+
+	if (!intf->get_digest_init) { /**add other check as well */
+		FCS_LOG_ERR("Get digest API init not available\n");
+		ret = -ENXIO;
+		goto unlock;
+	}
+
+	memcpy(digest_ctx.dgst.suuid, session_uuid, FCS_OSAL_UUID_SIZE);
+
+	/* Read input file details */
+	digest_file_handle = filesys_intf.open(req->filename, FCS_FILE_READ);
+	if (!digest_file_handle) {
+		FCS_LOG_ERR("Error in opening input file %s\n",
+			    strerror(errno));
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	ret = filesys_intf.get_size(digest_file_handle, &file_size);
+	if (ret != 0 || file_size == 0) {
+		FCS_LOG_ERR("Failed to get file size: ret: %d file_size: %d\n",
+			    ret, file_size);
+		goto close_src_file;
+	}
+
+	digest_ctx.dgst.context_id = context_id;
+	digest_ctx.dgst.key_id = keyid;
+	digest_ctx.dgst.sha_op_mode = req->sha_op_mode;
+	digest_ctx.dgst.sha_digest_sz = req->sha_digest_sz;
+	digest_ctx.dgst.digest_len = &dst_len;
+	digest_ctx.error_code_addr = &error_code;
+
+	if (req->sha_digest_sz == 0) {
+		dst_len = FCS_SHA256_DIGEST_SIZE;
+	} else if (req->sha_digest_sz == 1) {
+		dst_len = FCS_SHA384_DIGEST_SIZE;
+	} else if (req->sha_digest_sz == 2) {
+		dst_len = FCS_SHA512_DIGEST_SIZE;
+	} else {
+		FCS_LOG_ERR("Invalid argument: sha_digest_sz\n");
+		ret = -EINVAL;
+		goto free_src;
+	}
+
+	/* Initialize the digest context */
+	ret = intf->get_digest_init(&digest_ctx);
+	if (ret != 0) {
+		FCS_LOG_ERR("Error in requesting get digest init  %s\n",
+			    strerror(errno));
+	} else if (error_code) {
+		ret = error_code;
+		FCS_LOG_ERR("Failed to request get digest init with sdm error code = 0x%x\n",
+			    error_code);
+		goto free_src;
+	}
+
+	digest_ctx.dgst.digest = fcs_malloc(dst_len);
+	if (!digest_ctx.dgst.digest) {
+		FCS_LOG_ERR("Failed to allocate memory for destination buffer\n");
+		ret = -ENOMEM;
+		goto free_src;
+	}
+
+	remaining_size = file_size;
+	buffer = fcs_malloc(remaining_size > CRYPTO_MAX_SZ ?
+			    CRYPTO_MAX_SZ : remaining_size);
+	if (!buffer) {
+		FCS_LOG_ERR("Failed to allocate memory for buffer\n");
+		ret = -ENOMEM;
+		goto free_dst;
+	}
+	digest_ctx.dgst.src = buffer;
+
+	while (remaining_size > 0) {
+		if (remaining_size > CRYPTO_MAX_SZ) {
+			chunk_size = CRYPTO_MAX_SZ;
+			is_update = true;
+		} else {
+			chunk_size = remaining_size;
+			is_update = false;
+		}
+
+		bytes_read = filesys_intf.read(buffer, chunk_size, digest_file_handle);
+		if (bytes_read <= 0) {
+			FCS_LOG_ERR("Error reading input file\n");
+			ret = -EIO;
+			goto free_dst;
+		}
+
+		digest_ctx.dgst.src_len = bytes_read;
+
+		if (is_update)
+			ret = intf->get_digest_update(&digest_ctx);
+		else
+			ret = intf->get_digest_final(&digest_ctx);
+
+		if (ret != 0) {
+			FCS_LOG_ERR("Error in get digest update stage\n");
+			goto free_dst;
+		}
+		if (error_code) {
+			ret = error_code;
+			goto free_dst;
+		}
+
+		remaining_size -= bytes_read;
+	}
+
+	/* Write the final output to the output file */
+	FCS_LOG_DBG("Writing final output to the output file\n");
+	digest_outfile_handle = filesys_intf.open(req->outfilename, FCS_FILE_WRITE);
+	if (!digest_outfile_handle) {
+		FCS_LOG_ERR("Error in opening output file %s\n", strerror(errno));
+		ret = -EINVAL;
+		goto free_dst;
+	}
+	bytes_written = filesys_intf.write(digest_ctx.dgst.digest,
+				 (FCS_OSAL_SIZE)dst_len, digest_outfile_handle);
+	if (bytes_written <= 0) {
+		FCS_LOG_ERR("Error writing to output file\n");
+		ret = -EIO;
+		goto close_dst_file;
+	}
+	if (error_code) {
+		ret = error_code;
+		FCS_LOG_ERR("Failed to request get digest with sdm error code = 0x%x\n",
+			    error_code);
+		goto close_dst_file;
+	}
+	FCS_LOG_DBG("Get digest completed successfully\n");
+
+close_dst_file:
+	filesys_intf.close(digest_outfile_handle);
+	digest_outfile_handle = NULL;
+free_dst:
+	fcs_osal_free(digest_ctx.dgst.digest);
+	digest_ctx.dgst.digest = NULL;
+free_src:
+	fcs_osal_free(buffer);
+	buffer = NULL;
+close_src_file:
+	filesys_intf.close(digest_file_handle);
+	digest_file_handle = NULL;
+unlock:
+	if (MUTEX_UNLOCK() != 0) {
+		FCS_LOG_ERR("Mutex unlock failed in fcs digest command\n");
+		return -EAGAIN;
+	}
+	return ret;
+}
+
+FCS_OSAL_INT
+fcs_mac_verify_streaming(FCS_OSAL_UUID *session_uuid, FCS_OSAL_U32 key_id,
+			 FCS_OSAL_U32 context_id,
+			 struct fcs_mac_verify_req_streaming *req)
+{
+	FCS_OSAL_INT ret = 0;
+	struct fcs_cmd_context mac_ctx;
+	FCS_OSAL_FILE *mac_user_file_handle = NULL;
+	FCS_OSAL_FILE *digest_file_handle = NULL;
+	FCS_OSAL_FILE *mac_outfile_handle = NULL;
+	FCS_OSAL_INT error_code = 0;
+	FCS_OSAL_SIZE bytes_read = 0;
+	FCS_OSAL_U32 dst_len = 0;
+	FCS_OSAL_SIZE remaining_size = 0, user_file_size = 0, digest_file_size = 0;
+	FCS_OSAL_SIZE data_size, ud_sz;
+	FCS_OSAL_INT command = 0;
+	FCS_OSAL_INT bytes_written = 0;
+
+	if (ctx.state != initialized) {
+		FCS_LOG_ERR("FCS library not initialized\n");
+		return -EINVAL;
+	}
+
+	if (!session_uuid) {
+		FCS_LOG_ERR("Invalid argument: session_uuid is NULL\n");
+		return -EINVAL;
+	}
+
+	if (!req) {
+		FCS_LOG_ERR("Invalid argument: req is NULL\n");
+		return -EINVAL;
+	}
+
+	if (!req->filename1 || !req->filename2) {
+		FCS_LOG_ERR("Missing input or output filename\n");
+		return -EINVAL;
+	}
+
+	if (req->op_mode != 0 && req->op_mode != 1) {
+		FCS_LOG_ERR("Invalid argument: mac_mode\n");
+		return -EINVAL;
+	}
+
+	if (req->dig_sz != 0 && req->dig_sz != 1 && req->dig_sz != 2) {
+		FCS_LOG_ERR("Invalid argument: mac_digest_sz\n");
+		return -EINVAL;
+	}
+
+	if (req->dig_sz == 0) {
+		dst_len = FCS_SHA256_DIGEST_SIZE;
+	} else if (req->dig_sz == 1) {
+		dst_len = FCS_SHA384_DIGEST_SIZE;
+	} else if (req->dig_sz == 2) {
+		dst_len = FCS_SHA512_DIGEST_SIZE;
+	} else {
+		FCS_LOG_ERR("Invalid argument: mac_digest_sz\n");
+		return -EINVAL;
+	}
+
+	if (MUTEX_LOCK() != 0) {
+		FCS_LOG_ERR("Mutex lock failed in fcs mac command\n");
+		return -EAGAIN;
+	}
+
+	if (!intf->mac_verify_init) { /**add other check as well */
+		FCS_LOG_ERR("MAC verify API not available\n");
+		ret = -ENXIO;
+		goto unlock;
+	}
+
+	memcpy(mac_ctx.mac_verify.suuid, session_uuid, FCS_OSAL_UUID_SIZE);
+	mac_ctx.mac_verify.context_id = context_id;
+	mac_ctx.mac_verify.key_id = key_id;
+	mac_ctx.mac_verify.sha_op_mode = req->op_mode;
+	mac_ctx.mac_verify.sha_digest_sz = req->dig_sz;
+	mac_ctx.error_code_addr = &error_code;
+	mac_ctx.mac_verify.dst_size = &dst_len;
+
+	FCS_LOG_DBG("MAC verify: init\n");
+	ret = intf->mac_verify_init(&mac_ctx);
+	if (ret != 0) {
+		FCS_LOG_ERR("MAC verify init failed with error code: %d\n", ret);
+		goto unlock;
+	}
+	if (error_code) {
+		ret = error_code;
+		FCS_LOG_ERR("Failed to request MAC verify with sdm error code = 0x%x\n",
+			    error_code);
+		goto unlock;
+	}
+
+	/* Read input file details */
+	mac_user_file_handle = filesys_intf.open(req->filename1, FCS_FILE_READ);
+	if (!mac_user_file_handle) {
+		FCS_LOG_ERR("Error in opening input file %s\n",
+			    strerror(errno));
+		ret = -EINVAL;
+		goto unlock;
+	}
+	ret = filesys_intf.get_size(mac_user_file_handle, &user_file_size);
+	if (ret != 0 || user_file_size == 0) {
+		FCS_LOG_ERR("Failed to get file size: ret: %d file_size: %d\n",
+			    ret, user_file_size);
+		goto close_src_file;
+	}
+	
+	digest_file_handle = filesys_intf.open(req->filename2, FCS_FILE_READ);
+	if (!digest_file_handle) {
+		FCS_LOG_ERR("Error in opening digest file %s\n",
+			    strerror(errno));
+		ret = -EINVAL;
+		goto close_src_file;
+	}
+	ret = filesys_intf.get_size(digest_file_handle, &digest_file_size);
+	if (ret != 0 || digest_file_size == 0) {
+		FCS_LOG_ERR("Failed to get file size: ret: %d file_size: %d\n",
+			    ret, digest_file_size);
+		goto close_digest_file;
+	}
+
+	/* Allocate memory for source, signature and public key */
+	mac_ctx.mac_verify.src = fcs_malloc(CRYPTO_MAX_SZ);
+	if (!mac_ctx.mac_verify.src) {
+		FCS_LOG_ERR("Failed to allocate memory for source buffer\n");
+		ret = -ENOMEM;
+		goto close_digest_file;
+	}
+
+	mac_ctx.mac_verify.dst = fcs_malloc(dst_len);
+	if (!mac_ctx.mac_verify.dst) {
+		FCS_LOG_ERR("Failed to allocate memory for destination buffer\n");
+		ret = -ENOMEM;
+		goto free_src;
+	}
+
+	remaining_size = user_file_size + digest_file_size;
+
+	while (remaining_size > 0) {
+		if (remaining_size > CRYPTO_MAX_SZ) {
+			if ((remaining_size - CRYPTO_MAX_SZ) >=
+			    (DIGEST_SERVICE_MIN_DATA_SIZE + digest_file_size)) {
+				data_size = CRYPTO_MAX_SZ;
+				ud_sz = CRYPTO_MAX_SZ;
+			} else {
+				data_size = remaining_size -
+					    (DIGEST_SERVICE_MIN_DATA_SIZE +
+					     digest_file_size);
+				ud_sz = remaining_size -
+					(DIGEST_SERVICE_MIN_DATA_SIZE +
+					 digest_file_size);
+			}
+			command = MAC_VERIFY_UPDATE;
+		} else {
+			data_size = remaining_size;
+			ud_sz = remaining_size - digest_file_size;
+			command = MAC_VERIFY_FINAL;
+		}
+
+		mac_ctx.mac_verify.src_size = data_size;
+		mac_ctx.mac_verify.user_data_size = ud_sz;
+
+		bytes_read = filesys_intf.read(mac_ctx.mac_verify.src, ud_sz, mac_user_file_handle);
+		if (bytes_read <= 0) {
+			FCS_LOG_ERR("Error reading input source file\n");
+			ret = -EIO;
+			goto free_dst;
+		}
+		if (bytes_read > data_size) {
+			FCS_LOG_ERR("Read size is greater than data size\n");
+			ret = -EINVAL;
+			goto free_dst;
+		}
+
+		if(command == MAC_VERIFY_UPDATE)
+			intf->mac_verify_update(&mac_ctx);
+		else {
+			bytes_read = filesys_intf.read(mac_ctx.mac_verify.src + ud_sz, digest_file_size, digest_file_handle);
+			if (bytes_read <= 0) {
+				FCS_LOG_ERR("Error reading input digest file\n");
+				ret = -EIO;
+				goto free_dst;
+			}
+			if (bytes_read > digest_file_size) {
+				FCS_LOG_ERR("Read size is greater than digest size\n");
+				ret = -EINVAL;
+				goto free_dst;
+			}
+			intf->mac_verify_final(&mac_ctx);
+		}
+		if (ret != 0) {
+			FCS_LOG_ERR("Error in MAC verify update stage\n");
+			goto free_dst;
+		}
+		if (error_code) {
+			ret = error_code;
+			FCS_LOG_ERR("Failed to request MAC verify with sdm error code = 0x%x\n",
+				    error_code);
+			goto free_dst;
+		}
+
+		remaining_size -= data_size;
+	}
+
+	if(remaining_size == 0) {
+		/* Write to outfile*/
+		mac_outfile_handle = filesys_intf.open(req->outfilename, FCS_FILE_WRITE);
+		if (!mac_outfile_handle) {
+			FCS_LOG_ERR("Error in opening output file %s\n",
+				    strerror(errno));
+			ret = -EINVAL;
+			goto free_dst;
+		}
+		/* write the final output to the output file */
+		bytes_written = filesys_intf.write(mac_ctx.mac_verify.dst,
+					 (FCS_OSAL_SIZE)dst_len, mac_outfile_handle);
+		if (bytes_written <= 0) {
+			FCS_LOG_ERR("Error writing to output file\n");
+			goto close_dst_file;
+		}
+
+		if (mac_ctx.mac_verify.dst[0] != 0x0d || mac_ctx.mac_verify.dst[1] != 0x90) {
+			FCS_LOG_ERR("MAC verify failed\n");
+			ret = -EIO;
+		} else {
+			FCS_LOG_DBG("MAC verify completed successfully\n");
+		}
+	}
+
+close_dst_file:
+	filesys_intf.close(mac_outfile_handle);
+	mac_outfile_handle = NULL;
+free_dst:
+	fcs_osal_free(mac_ctx.mac_verify.dst);
+	mac_ctx.mac_verify.dst = NULL;
+free_src:
+	fcs_osal_free(mac_ctx.mac_verify.src);
+	mac_ctx.mac_verify.src = NULL;
+close_digest_file:
+	filesys_intf.close(digest_file_handle);
+	digest_file_handle = NULL;
+close_src_file:
+	filesys_intf.close(mac_user_file_handle);
+	mac_user_file_handle = NULL;
+unlock:
+	if (MUTEX_UNLOCK() != 0) {
+		FCS_LOG_ERR("Mutex unlock failed in fcs mac command\n");
+		return -EAGAIN;
+	}
+
+	return ret;
+}
+
+FCS_OSAL_INT fcs_aes_crypt_streaming(FCS_OSAL_UUID *session_uuid,
+				     FCS_OSAL_U32 key_id,
+				     FCS_OSAL_U32 context_id,
+				     struct fcs_aes_req_streaming *req)
+{
+	FCS_OSAL_INT ret = 0;
+	struct fcs_cmd_context aes_ctx;
+	FCS_OSAL_SIZE src_file_size = 0, iv_file_size = 0, aad_file_size = 0,
+		      bytes_wrote = 0;
+	FCS_OSAL_U32 tag_len = CRYPTO_AES_GCM_TAG_LEN;
+	FCS_OSAL_INT error_code = 0;
+	FCS_OSAL_FILE *aes_src_handle = NULL, *aes_aad_handle = NULL;
+	FCS_OSAL_FILE *aes_tag_handle = NULL, *aes_iv_handle = NULL;
+	FCS_OSAL_FILE *aes_dst_handle = NULL;
+	FCS_OSAL_CHAR *iv = NULL, *tag = NULL, *aad = NULL;
+	FCS_OSAL_U32 pad1 = 0, ip_len = 0, src_len = 0, dst_len = 0;
+
+	if (ctx.state != initialized) {
+		FCS_LOG_ERR("FCS library not initialized\n");
+		return -EINVAL;
+	}
+
+	if (!session_uuid) {
+		FCS_LOG_ERR("Invalid argument: session_uuid is NULL\n");
+		return -EINVAL;
+	}
+
+	if (!req) {
+		FCS_LOG_ERR("Invalid argument: req is NULL\n");
+		return -EINVAL;
+	}
+
+	if (!req->filename || !req->outfilename) {
+		FCS_LOG_ERR("Missing input or output filename\n");
+		return -EINVAL;
+	}
+
+	if (req->crypt_mode != FCS_AES_ENCRYPT &&
+	    req->crypt_mode != FCS_AES_DECRYPT) {
+		FCS_LOG_ERR("Invalid argument: crypt_mode\n");
+		return -EINVAL;
+	}
+
+	if (req->block_mode != FCS_AES_BLOCK_MODE_ECB &&
+	    req->block_mode != FCS_AES_BLOCK_MODE_CBC &&
+	    req->block_mode != FCS_AES_BLOCK_MODE_CTR &&
+	    req->block_mode != FCS_AES_BLOCK_MODE_GCM &&
+	    req->block_mode != FCS_AES_BLOCK_MODE_GHASH) {
+		FCS_LOG_ERR("Invalid argument: block_mode\n");
+		return -EINVAL;
+	}
+
+	if (req->block_mode != FCS_AES_BLOCK_MODE_ECB && !req->iv_file) {
+		FCS_LOG_ERR("IV file is not present for block_mode:%d\n",
+			    req->block_mode);
+		return -EINVAL;
+	}
+
+	if (req->iv_source != FCS_AES_IV_SOURCE_INTERNAL &&
+	    req->iv_source != FCS_AES_IV_SOURCE_EXTERNAL) {
+		FCS_LOG_ERR("Invalid argument: iv_source\n");
+		return -EINVAL;
+	}
+
+	if (MUTEX_LOCK() != 0) {
+		FCS_LOG_ERR("Mutex lock failed in fcs aes crypt command\n");
+		return -EAGAIN;
+	}
+
+	/* Read input file details */
+	aes_src_handle = filesys_intf.open(req->filename, FCS_FILE_READ);
+	if (!aes_src_handle) {
+		FCS_LOG_ERR("Error in opening input file %s\n",
+			    strerror(errno));
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	ret = filesys_intf.get_size(aes_src_handle, &src_file_size);
+	if (ret != 0 || src_file_size == 0) {
+		FCS_LOG_ERR("Failed to get file size: ret: %d file_size: %d\n",
+			    ret, src_file_size);
+		goto close_src_file;
+	}
+
+	if (req->block_mode != 0) {
+		/* Read IV file details */
+		aes_iv_handle = filesys_intf.open(req->iv_file, FCS_FILE_READ);
+		if (!aes_iv_handle) {
+			FCS_LOG_ERR("Error in opening IV file %s\n",
+				    strerror(errno));
+			ret = -EINVAL;
+			goto close_src_file;
+		}
+
+		ret = filesys_intf.get_size(aes_iv_handle, &iv_file_size);
+		if (ret != 0 || iv_file_size == 0) {
+			FCS_LOG_ERR("Failed to get file size: ret: %d file_size: %d\n",
+				ret, iv_file_size);
+			goto close_iv_file;
+		}
+
+		iv = fcs_malloc(iv_file_size);
+		if (!iv) {
+			FCS_LOG_ERR(
+				"Failed to allocate memory for IV buffer\n");
+			ret = -ENOMEM;
+			goto close_iv_file;
+		}
+		/* Read IV data */
+		if (filesys_intf.read(iv, iv_file_size, aes_iv_handle) <= 0) {
+			FCS_LOG_ERR("Error reading IV file\n");
+			ret = -EIO;
+			goto free_iv;
+		}
+	}
+
+	if (req->block_mode == FCS_AES_BLOCK_MODE_GCM ||
+	    req->block_mode == FCS_AES_BLOCK_MODE_GHASH) {
+		if (!req->aad_file) {
+			FCS_LOG_ERR(
+				"AAD file is not present for block_mode:%d\n",
+				req->block_mode);
+			ret = -EINVAL;
+			goto free_iv;
+		}
+
+		/* Read AAD file details */
+		aes_aad_handle =
+			filesys_intf.open(req->aad_file, FCS_FILE_READ);
+		if (!aes_aad_handle) {
+			FCS_LOG_ERR("Error in opening AAD file %s\n",
+				    strerror(errno));
+			ret = -EINVAL;
+			goto free_iv;
+		}
+		ret = filesys_intf.get_size(aes_aad_handle, &aad_file_size);
+		if (ret != 0 || aad_file_size == 0) {
+			FCS_LOG_ERR("Failed to get file size: ret: %d file_size: %d\n",
+				ret, aad_file_size);
+			goto close_aad_file;
+		}
+
+		aad = fcs_malloc(aad_file_size);
+		if (!aad) {
+			FCS_LOG_ERR(
+				"Failed to allocate memory for AAD buffer\n");
+			ret = -ENOMEM;
+			goto close_aad_file;
+		}
+
+		/* Read AAD data */
+		if (filesys_intf.read(aad, aad_file_size, aes_aad_handle) <=
+		    0) {
+			FCS_LOG_ERR("Error reading AAD file\n");
+			ret = -EIO;
+			goto free_aad;
+		}
+
+		/* Check if the tag file name is mandatory */
+		if (!req->tag_file) {
+			FCS_LOG_ERR(
+				"Tag file is not present for block_mode:%d\n",
+				req->block_mode);
+			ret = -EINVAL;
+			goto free_aad;
+		}
+
+		tag = fcs_malloc(tag_len);
+		if (!tag) {
+			FCS_LOG_ERR(
+				"Failed to allocate memory for tag buffer\n");
+			ret = -ENOMEM;
+			goto free_aad;
+		}
+
+		if (req->crypt_mode == FCS_AES_DECRYPT) {
+			/* Open tag file in read mode */
+			aes_tag_handle =
+				filesys_intf.open(req->tag_file, FCS_FILE_READ);
+			if (!aes_tag_handle) {
+				FCS_LOG_ERR("Error in opening tag file %s\n",
+					    strerror(errno));
+				ret = -EINVAL;
+				goto free_tag;
+			}
+
+			/* read into tag */
+			if (filesys_intf.read(tag, tag_len, aes_tag_handle) <=
+			    0) {
+				FCS_LOG_ERR("Error reading tag file\n");
+				ret = -EIO;
+				goto close_tag_file;
+			}
+		}
+	}
+
+	/* Open output file for storing result of AES encryption/decryption */
+	aes_dst_handle = filesys_intf.open(req->outfilename, FCS_FILE_APPEND);
+	if (!aes_dst_handle) {
+		FCS_LOG_ERR("Error in opening output file %s\n",
+			    strerror(errno));
+		ret = -EINVAL;
+		goto close_tag_file;
+	}
+
+	/* Start AES Encrypt/Decrypt case */
+	memset(&aes_ctx, 0, sizeof(aes_ctx));
+	aes_ctx.error_code_addr = &error_code;
+
+	memcpy(aes_ctx.aes.suuid, session_uuid, FCS_OSAL_UUID_SIZE);
+	aes_ctx.aes.kid = key_id;
+	aes_ctx.aes.cid = context_id;
+	aes_ctx.aes.crypt = req->crypt_mode;
+	aes_ctx.aes.mode = req->block_mode;
+	aes_ctx.aes.iv_source = req->iv_source;
+	aes_ctx.aes.iv = iv;
+	aes_ctx.aes.aad = aad;
+	aes_ctx.aes.aad_len = aad_file_size;
+	aes_ctx.aes.tag = tag;
+	aes_ctx.aes.tag_len = tag_len;
+	aes_ctx.aes.op_len = &dst_len;
+
+	/* AES cryption init stage */
+	ret = intf->aes_crypt_init(&aes_ctx);
+	if (ret != 0) {
+		FCS_LOG_ERR("Error in requesting AES crypt init  %s\n",
+			    strerror(errno));
+		goto close_dst_file;
+	} else if (error_code) {
+		ret = error_code;
+		FCS_LOG_ERR(
+			"Failed to request AES crypt init with sdm error code = %x\n",
+			error_code);
+		goto close_dst_file;
+	}
+
+	/* AES cryption update/final stage */
+
+	pad1 = (aad_file_size % GCM_AAD_ALIGN) ?
+		       (GCM_AAD_ALIGN - (aad_file_size % GCM_AAD_ALIGN)) :
+		       0;
+
+	aes_ctx.aes.input = fcs_malloc(CRYPTO_MAX_SZ);
+	if (!aes_ctx.aes.input) {
+		FCS_LOG_ERR("Failed to allocate memory for input buffer\n");
+		ret = -ENOMEM;
+		goto close_dst_file;
+	}
+
+	ip_len = src_file_size + aad_file_size + pad1;
+
+	/***************************************** Size of output ************************************************/
+	aes_ctx.aes.output = fcs_malloc(CRYPTO_MAX_SZ);
+	if (!aes_ctx.aes.output) {
+		FCS_LOG_ERR("Failed to allocate memory for output buffer\n");
+		ret = -ENOMEM;
+		goto free_input;
+	}
+
+	while (ip_len > CRYPTO_MAX_SZ) {
+		src_len = CRYPTO_MAX_SZ - (aad_file_size + pad1);
+		aes_ctx.aes.ip_len = src_len;
+
+		/* read src of size src_len */
+		ret = filesys_intf.read(aes_ctx.aes.input, src_len,
+					aes_src_handle);
+		if (ret <= 0) {
+			FCS_LOG_ERR("Error reading source file\n");
+			ret = -EIO;
+			goto free_dst;
+		}
+
+		ret = intf->aes_crypt_update(&aes_ctx);
+		if (ret != 0) {
+			FCS_LOG_ERR("Error in AES crypt update stage\n");
+			goto free_dst;
+		} else if (error_code) {
+			FCS_LOG_ERR(
+				"Failed to request AES crypt with sdm error code = %x\n",
+				error_code);
+			ret = error_code;
+			goto free_dst;
+		}
+
+		/* Write destination into output file */
+		bytes_wrote = filesys_intf.write(aes_ctx.aes.output,
+						 *aes_ctx.aes.op_len,
+						 aes_dst_handle);
+		if (bytes_wrote <= 0) {
+			FCS_LOG_ERR("Error writing to output file\n");
+			ret = -EIO;
+			goto free_dst;
+		}
+
+		ip_len -= (src_len + aad_file_size +
+			   pad1); // 4MB + 8 - ((4MB - 16) + 16) -> 8
+
+		/* AAD should be sent only once not in every update */
+		aad_file_size = 0;
+		aes_ctx.aes.aad_len = aad_file_size;
+		pad1 = 0;
+	}
+
+	if (req->block_mode == FCS_AES_BLOCK_MODE_GCM ||
+	    req->block_mode == FCS_AES_BLOCK_MODE_GHASH) {
+		if (ip_len > (CRYPTO_MAX_SZ - GCM_TAG_LEN)) {
+			src_len = CRYPTO_MAX_SZ - GCM_TAG_LEN -
+				  (aad_file_size + pad1);
+
+			aes_ctx.aes.ip_len = src_len;
+			/* read src of size src_len */
+			ret = filesys_intf.read(aes_ctx.aes.input, src_len,
+						aes_src_handle);
+			if (ret <= 0) {
+				FCS_LOG_ERR("Error reading source file\n");
+				ret = -EIO;
+				goto free_dst;
+			}
+
+			ret = intf->aes_crypt_update(&aes_ctx);
+			if (ret != 0) {
+				FCS_LOG_ERR(
+					"Error in AES crypt update stage\n");
+				goto free_dst;
+			} else if (error_code) {
+				ret = error_code;
+				FCS_LOG_ERR(
+					"Failed to request AES crypt with sdm error code = %x\n",
+					error_code);
+				goto free_dst;
+			}
+
+			/* Write destination into output file */
+			bytes_wrote = filesys_intf.write(aes_ctx.aes.output,
+							 *aes_ctx.aes.op_len,
+							 aes_dst_handle);
+			if (bytes_wrote <= 0) {
+				FCS_LOG_ERR("Error writing to output file\n");
+				ret = -EIO;
+				goto free_dst;
+			}
+
+			ip_len -= (src_len + aad_file_size + pad1);
+			aad_file_size = 0;
+			aes_ctx.aes.aad_len = aad_file_size;
+			pad1 = 0;
+		}
+	}
+
+	src_len = ip_len - (aad_file_size + pad1);
+	aes_ctx.aes.ip_len = src_len;
+
+	/* read src of size src_len */
+	ret = filesys_intf.read(aes_ctx.aes.input, src_len, aes_src_handle);
+	if (ret <= 0) {
+		FCS_LOG_ERR("Error reading source file\n");
+		ret = -EIO;
+		goto free_dst;
+	}
+
+	ret = intf->aes_crypt_final(&aes_ctx);
+	if (ret != 0) {
+		FCS_LOG_ERR("Error in AES crypt final stage\n");
+		goto free_dst;
+	} else if (error_code) {
+		ret = error_code;
+		FCS_LOG_ERR(
+			"Failed to request AES crypt with sdm error code = %x\n",
+			error_code);
+		goto free_dst;
+	}
+	/* Write destination into output file */
+	if (aes_ctx.aes.mode != FCS_AES_BLOCK_MODE_GHASH) {
+		bytes_wrote = filesys_intf.write(aes_ctx.aes.output,
+						 *aes_ctx.aes.op_len,
+						 aes_dst_handle);
+		if (bytes_wrote <= 0) {
+			FCS_LOG_ERR("Error writing to output file\n");
+			ret = -EIO;
+			goto free_dst;
+		}
+	}
+
+	if (aes_ctx.aes.crypt == FCS_AES_ENCRYPT &&
+	    (aes_ctx.aes.mode == FCS_AES_BLOCK_MODE_GCM ||
+	     aes_ctx.aes.mode == FCS_AES_BLOCK_MODE_GHASH)) {
+		aes_tag_handle =
+			filesys_intf.open(req->tag_file, FCS_FILE_WRITE);
+		if (!aes_tag_handle) {
+			FCS_LOG_ERR("Error in opening tag file %s\n",
+				    strerror(errno));
+			ret = -EINVAL;
+			goto free_tag;
+		}
+		/* store tag result into a tag file */
+		bytes_wrote = filesys_intf.write(
+			aes_ctx.aes.tag, aes_ctx.aes.tag_len, aes_tag_handle);
+		if (bytes_wrote <= 0) {
+			FCS_LOG_ERR("Error writing to tag file\n");
+			ret = -EIO;
+			goto free_dst;
+		}
+	}
+
+free_dst:
+	fcs_osal_free(aes_ctx.aes.output);
+	aes_ctx.aes.output = NULL;
+
+free_input:
+	fcs_osal_free(aes_ctx.aes.input);
+	aes_ctx.aes.input = NULL;
+
+close_dst_file:
+	filesys_intf.close(aes_dst_handle);
+	aes_dst_handle = NULL;
+
+close_tag_file:
+	if (req->block_mode == FCS_AES_BLOCK_MODE_GCM ||
+	    req->block_mode == FCS_AES_BLOCK_MODE_GHASH) {
+		filesys_intf.close(aes_tag_handle);
+		aes_tag_handle = NULL;
+	}
+free_tag:
+	if (req->block_mode == FCS_AES_BLOCK_MODE_GCM ||
+	    req->block_mode == FCS_AES_BLOCK_MODE_GHASH) {
+		fcs_osal_free(tag);
+		tag = NULL;
+	}
+
+free_aad:
+	if (req->block_mode == FCS_AES_BLOCK_MODE_GCM ||
+	    req->block_mode == FCS_AES_BLOCK_MODE_GHASH) {
+		fcs_osal_free(aad);
+		aad = NULL;
+	}
+
+close_aad_file:
+	if (req->block_mode == FCS_AES_BLOCK_MODE_GCM ||
+	    req->block_mode == FCS_AES_BLOCK_MODE_GHASH) {
+		filesys_intf.close(aes_aad_handle);
+		aes_aad_handle = NULL;
+	}
+free_iv:
+	if (req->block_mode) {
+		fcs_osal_free(aes_ctx.aes.iv);
+		aes_ctx.aes.iv = NULL;
+	}
+close_iv_file:
+	if (req->block_mode) {
+		filesys_intf.close(aes_iv_handle);
+		aes_iv_handle = NULL;
+	}
+
+close_src_file:
+	filesys_intf.close(aes_src_handle);
+	aes_src_handle = NULL;
+unlock:
+	if (MUTEX_UNLOCK() != 0) {
+		FCS_LOG_ERR("Mutex unlock failed in fcs aes crypt command\n");
+		return -EAGAIN;
+	}
+
+	return ret;
+}
+
+const FCS_OSAL_CHAR *fcs_get_version(void)
+{
+	static char version_str[128];
+	snprintf(version_str, sizeof(version_str),
+		 "libFCS Version: %s, Git SHA: %s", FCS_PROJECT_VERSION,
+		 FCS_GIT_HASH);
+	return version_str;
 }

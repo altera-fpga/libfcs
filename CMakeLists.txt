@@ -12,13 +12,19 @@ include(cmake/checkGit.cmake)
 get_git_commit()
 
 project(FCS
-        VERSION 1.02
+        VERSION 2.00
         LANGUAGES ASM C CXX
         DESCRIPTION "Library for FPGA Crypto Services for Altera SoCFPGAs")
 
 message("-- PROJECT NAME      : ${PROJECT_NAME}")
 message("-- PROJECT VERSION   : ${PROJECT_VERSION}")
 message("-- PROJECT GIT SHA1  : ${GIT_HASH}")
+
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/fcs_version.h.in
+  ${CMAKE_CURRENT_BINARY_DIR}/include/fcs_version.h
+  @ONLY
+)
 
 include(cmake/doxygen.cmake)
 
@@ -39,6 +45,9 @@ endif ()
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_C_STANDARD 11)
+
+# include dir
+include_directories(FCS PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/include)
 
 add_library(FCS ${LIBRARY_TYPE} "")
 

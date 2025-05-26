@@ -17,6 +17,7 @@ extern "C" {
 #endif /* __cplusplus */
 
 #include <libfcs_osal_types.h>
+#include <libfcs_filesys_ops.h>
 
 /**
  * @brief FCS OSAL time for running forever.
@@ -391,6 +392,9 @@ struct libfcs_osal_intf {
 	FCS_OSAL_INT (*aes_crypt)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*ecdh_req)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*get_digest)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*get_digest_init)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*get_digest_update)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*get_digest_final)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*mac_verify)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*get_chip_id)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*attestation_get_certificate)(struct fcs_cmd_context *ctx);
@@ -413,6 +417,18 @@ struct libfcs_osal_intf {
 	FCS_OSAL_INT (*ecdsa_sha2_data_verify)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*hps_img_validate)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*mbox_send_cmd)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*ecdsa_data_sign_init)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*ecdsa_data_sign_update)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*ecdsa_data_sign_final)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*ecdsa_data_verify_init)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*ecdsa_data_verify_update)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*ecdsa_data_verify_final)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*aes_crypt_init)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*aes_crypt_update)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*aes_crypt_final)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*mac_verify_init)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*mac_verify_update)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*mac_verify_final)(struct fcs_cmd_context *ctx);
 };
 
 /**
