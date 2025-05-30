@@ -10,7 +10,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <kcapi.h>
 #include <libfcs_osal.h>
 #include <stdlib.h>
 #include <time.h>
@@ -37,7 +36,6 @@
 static FCS_OSAL_CHAR fcs_dev_local[FCS_DEV_BUF_SIZE + 1] = DEFAULT_SYS_DIR;
 
 static FCS_OSAL_INT fcs_linux_api_binding(struct libfcs_osal_intf *intf);
-static FCS_OSAL_INT fcs_linux_kcpai_init(FCS_OSAL_CHAR *loglevel);
 static FCS_OSAL_INT fcs_linux_open_service_session(struct fcs_cmd_context *ctx);
 static FCS_OSAL_INT
 fcs_linux_close_service_session(struct fcs_cmd_context *ctx);
@@ -603,35 +601,8 @@ fcs_linux_service_get_provision_data(struct fcs_cmd_context *ctx)
  */
 static FCS_OSAL_INT fcs_linux_random_number_ext(struct fcs_cmd_context *ctx)
 {
-	struct kcapi_handle *handle = NULL;
-	FCS_OSAL_INT ret;
-	/* Initialize the RNG context */
-	ret = kcapi_rng_init(&handle, "socfpga_rng", 0);
-	if (ret < 0) {
-		/* Check if the RNG initialization failed */
-		FCS_LOG_ERR("Failed to initialize RNG: %s\n", strerror(-ret));
-		return ret;
-	}
-
-	/* Send the open session command to the device */
-	ret = put_devattr(fcs_dev_local, "context_info", (FCS_OSAL_CHAR *)&ctx,
-			  sizeof(struct fcs_cmd_context *));
-	if (ret != 0) {
-		FCS_LOG_ERR("Failed to send open session command to the device: %s\n",
-			    strerror(-ret));
-		goto cleanup;
-	}
-
-	/* Generate random number */
-	ret = kcapi_rng_generate(handle, (uint8_t *)ctx->rng.rng, ctx->rng.rng_len);
-	if (ret < 0)
-		FCS_LOG_ERR("Failed to generate random number: %s\n", strerror(-ret));
-	else if ((FCS_OSAL_U32)ret == ctx->rng.rng_len)
-		ret = 0;
-
-cleanup:
-	kcapi_rng_destroy(handle);
-	return ret;
+	return put_devattr(fcs_dev_local, "get_rng", (FCS_OSAL_CHAR *)&ctx,
+			   sizeof(struct fcs_cmd_context *));
 }
 
 /**
@@ -1332,35 +1303,6 @@ static FCS_OSAL_INT fcs_linux_mac_verify_final(struct fcs_cmd_context *ctx)
 }
 
 /**
- * @brief Initialize log level for libkcapi
- *
- * @param loglevel
- *
- * @return 0 on success, otherwise value on error.
- */
-static FCS_OSAL_INT fcs_linux_kcpai_init(FCS_OSAL_CHAR *loglevel)
-{
-	if (!loglevel) {
-		kcapi_set_verbosity(KCAPI_LOG_WARN);
-		FCS_LOG_INF("No log level provided, setting to default as log_inf");
-		return -EINVAL;
-	}
-
-	if (strcmp(loglevel, "log_off") == 0)
-		kcapi_set_verbosity(KCAPI_LOG_NONE);
-	else if (strcmp(loglevel, "log_err") == 0)
-		kcapi_set_verbosity(KCAPI_LOG_ERR);
-	else if (strcmp(loglevel, "log_wrn") == 0)
-		kcapi_set_verbosity(KCAPI_LOG_WARN);
-	else if (strcmp(loglevel, "log_inf") == 0)
-		kcapi_set_verbosity(KCAPI_LOG_VERBOSE);
-	else if (strcmp(loglevel, "log_dbg") == 0)
-		kcapi_set_verbosity(KCAPI_LOG_DEBUG);
-
-	return 0;
-}
-
-/**
  * @brief Bind the OSAL API to the interface.
  *
  * @param intf Pointer to the OSAL interface.
@@ -1449,12 +1391,6 @@ FCS_OSAL_INT libfcs_osal_init(struct libfcs_osal_intf *intf,
 
 	if (ret != 0) {
 		FCS_LOG_ERR("Error in binding OSAL APIs\n");
-		return ret;
-	}
-
-	ret = fcs_linux_kcpai_init(loglevel);
-	if (ret < 0) {
-		FCS_LOG_ERR("Failed to initialize KCAPI: %s\n", strerror(-ret));
 		return ret;
 	}
 

@@ -1336,7 +1336,7 @@ int main(int argc, char *argv[])
 			tag_file = optarg;
 
 			break;
-		
+
 		case 20:
 
 			if (command != FCS_DEV_COMMAND_NONE) {

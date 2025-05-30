@@ -10,46 +10,6 @@ include(ExternalProject)
 # Get the number of available CPU cores
 ProcessorCount(NPROC)
 
-find_library(KCAPI_LIBRARY NAMES kcapi libkcapi)
-
-if(KCAPI_LIBRARY STREQUAL KCAPI_LIBRARY-NOTFOUND)
-  ########################
-  # libkcapi compilation #
-  ########################
-  # Define directories for the libkcapi project
-  set(LIBKCAPI_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/libkcapi)
-  set(LIBKCAPI_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/libkcapi)
-
-  # Define commands for configuring, building, and installing libkcapi
-  set(LIBKCAPI_CONFIGURE_COMMAND autoreconf -i ${LIBKCAPI_BUILD_DIR}/src/libkcapi &&
-    ${LIBKCAPI_BUILD_DIR}/src/libkcapi/configure
-    --prefix=${LIBKCAPI_INSTALL_DIR}
-    --host=${CROSS_COMPILE} > /dev/null)
-  set(LIBKCAPI_BUILD_COMMAND make -j${NPROC} > /dev/null)
-  set(LIBKCAPI_INSTALL_COMMAND make install > /dev/null)
-
-  # Add an external project for libkcapi
-  ExternalProject_Add(libkcapi
-    PREFIX ${LIBKCAPI_BUILD_DIR}/  # Directory to store the built project
-    GIT_REPOSITORY https://github.com/smuellerDD/libkcapi.git  # Git repository URL
-    GIT_TAG v1.5.0  # Specific tag to checkout
-    CONFIGURE_COMMAND ${LIBKCAPI_CONFIGURE_COMMAND}  # Command to configure the project
-    BUILD_COMMAND ${LIBKCAPI_BUILD_COMMAND}  # Command to build the project
-    INSTALL_COMMAND ${LIBKCAPI_INSTALL_COMMAND}  # Command to install the project
-    BUILD_BYPRODUCTS ${LIBKCAPI_INSTALL_DIR}/lib/libkcapi.so.1
-  )
-
-  # link libkcapi library with FCS
-  target_link_libraries(FCS PUBLIC ${LIBKCAPI_INSTALL_DIR}/lib/libkcapi.so.1)
-  target_include_directories(FCS PUBLIC ${LIBKCAPI_INSTALL_DIR}/include)
-
-  add_dependencies(FCS libkcapi)
-
-else()
-  target_link_libraries(FCS PRIVATE ${KCAPI_LIBRARY})
-endif()
-
-
 find_library(FDT_LIBRARY NAMES fdt libfdt)
 
 if(FDT_LIBRARY STREQUAL FDT_LIBRARY-NOTFOUND)
