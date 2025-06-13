@@ -48,6 +48,8 @@
 #define SDOS_HMAC_SZ				48
 #define SDOS_MAGIC_WORD				0xACBDBDED
 #define SDOS_HEADER_PADDING			0x01020304
+#define SDOS_DECRYPTION_WARN_102		0x102
+#define SDOS_DECRYPTION_WARN_103		0x103
 
 /* SDOS Decryption minimum and maximum size */
 #define SDOS_DECRYPTED_MIN_SZ		(SDOS_PLAINDATA_MIN_SZ + SDOS_HEADER_SZ)
@@ -2564,7 +2566,8 @@ int main(int argc, char *argv[])
 		sdos_dec_req.dst_sz = &dst_len;
 
 		ret = fcs_sdos_decrypt(session_uuid, context_id, &sdos_dec_req);
-		if (ret) {
+		if ((ret) && (ret != SDOS_DECRYPTION_WARN_102) &&
+		    (ret != SDOS_DECRYPTION_WARN_103)) {
 			free(src);
 			free(dst);
 			return ret;

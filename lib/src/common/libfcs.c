@@ -34,6 +34,9 @@
 #define ECDSA_RESPONSE_SIZE 4
 #define ECDSA_RESPONSE_HEADER_SIZE 12
 
+#define SDOS_DECRYPTION_REPROVISION_KEY_WARN	0x102
+#define SDOS_DECRYPTION_NOT_LATEST_KEY_WARN	0x103
+
 /**
  * @brief Enumeration for the state of the FCS library.
  */
@@ -1217,10 +1220,25 @@ FCS_OSAL_INT fcs_sdos_decrypt(FCS_OSAL_UUID *session_uuid,
 	ret = intf->sdos_decrypt(&sdos_ctx);
 	if (ret != 0) {
 		FCS_LOG_ERR("Error in decrypting data  %s\n", strerror(errno));
-	} else if (err_code) {
+	} else if ((err_code) &&
+		   (err_code != SDOS_DECRYPTION_REPROVISION_KEY_WARN) &&
+		   (err_code != SDOS_DECRYPTION_NOT_LATEST_KEY_WARN)) {
 		ret = err_code;
-		FCS_LOG_ERR("Failed to perform SDOS decrypting with sdm error code = %x\n",
-			    err_code);
+		FCS_LOG_ERR(
+			"Failed to perform SDOS decryption with sdm error code = %x\n",
+			err_code);
+	}
+
+	if (err_code == SDOS_DECRYPTION_REPROVISION_KEY_WARN) {
+		ret = err_code;
+		FCS_LOG_WRN(
+			"Successful decryption is performed, however reprovision existing key is recommended.\n");
+	}
+
+	if (err_code == SDOS_DECRYPTION_NOT_LATEST_KEY_WARN) {
+		ret = err_code;
+		FCS_LOG_WRN(
+			"Successful decryption is performed using a key that is not the latest key.\n");
 	}
 
 	if (MUTEX_UNLOCK() != 0) {
