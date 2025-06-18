@@ -53,6 +53,9 @@ write_basic_package_version_file(FCS.cmake
 add_subdirectory(third_party)
 add_subdirectory(include)
 add_subdirectory(lib)
-add_subdirectory(app)
+
+if(${ARCH} STREQUAL linux_aarch64)
+  add_subdirectory(app)
+endif()
 
 add_subdirectory(toolchain)

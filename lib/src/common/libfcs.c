@@ -2889,7 +2889,7 @@ static FCS_OSAL_INT fcs_fit_image_hash_verify(FCS_OSAL_UUID *session_uuid,
 	FCS_OSAL_SIZE cal_hash_size = FCS_SHA_384_DIGEST_SIZE;
 	struct fcs_digest_get_req get_digest_req;
 
-	cal_hash = (FCS_OSAL_CHAR *)malloc(FCS_SHA_384_DIGEST_SIZE);
+	cal_hash = (FCS_OSAL_CHAR *)fcs_malloc(FCS_SHA_384_DIGEST_SIZE);
 	if (!cal_hash) {
 		FCS_LOG_ERR("Error in allocating memory for image hash\n");
 		return -ENOMEM;
