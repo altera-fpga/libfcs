@@ -38,18 +38,25 @@ if(FDT_LIBRARY STREQUAL FDT_LIBRARY-NOTFOUND)
     CONFIGURE_COMMAND ${LIBFDT_CONFIGURE_COMMAND} # Command to configure the project
     BUILD_COMMAND ${LIBFDT_BUILD_COMMAND} # Command to build the project
     INSTALL_COMMAND ${LIBFDT_INSTALL_COMMAND} # Command to install the project
-    BUILD_BYPRODUCTS ${LIBFDT_INSTALL_DIR}/libfdt.a
+    BUILD_BYPRODUCTS ${LIBFDT_INSTALL_DIR}/libfdt.a ${LIBFDT_INSTALL_DIR}/libfdt.so
   )
-
   # Add libfdt and libkcapi dependency for fcs
   add_dependencies(FCS libfdt)
 
   # link fdt library with FCS
-  target_link_libraries(
-    FCS
-    PUBLIC
-    ${LIBFDT_INSTALL_DIR}/libfdt.a
-  )
+  if(LIBRARY_TYPE STREQUAL STATIC)
+    target_link_libraries(
+      FCS
+      PUBLIC
+      ${LIBFDT_INSTALL_DIR}/libfdt.a
+    )
+  else()
+    target_link_libraries(
+	  FCS
+	  PUBLIC
+	  ${LIBFDT_INSTALL_DIR}/libfdt.so
+	)
+  endif()
 
   target_include_directories(FCS PRIVATE "${LIBFDT_INSTALL_DIR}")
 
