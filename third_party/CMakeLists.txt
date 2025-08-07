@@ -25,7 +25,6 @@ if(FDT_LIBRARY STREQUAL FDT_LIBRARY-NOTFOUND)
   set(LIBFDT_BUILD_COMMAND CC=${CROSS_COMPILE}-gcc make -C ../libfdt libfdt > /dev/null)
   set(LIBFDT_INSTALL_COMMAND mkdir -p ${LIBFDT_INSTALL_DIR} &&
       cp ../libfdt/libfdt/libfdt.so ${LIBFDT_INSTALL_DIR}/ &&
-	  cp ../libfdt/libfdt/libfdt.a ${LIBFDT_INSTALL_DIR}/ &&
       cp ../libfdt/libfdt/libfdt.h ${LIBFDT_INSTALL_DIR} &&
       cp ../libfdt/libfdt/libfdt_env.h ${LIBFDT_INSTALL_DIR} &&
       cp ../libfdt/libfdt/fdt.h ${LIBFDT_INSTALL_DIR})
@@ -38,25 +37,18 @@ if(FDT_LIBRARY STREQUAL FDT_LIBRARY-NOTFOUND)
     CONFIGURE_COMMAND ${LIBFDT_CONFIGURE_COMMAND} # Command to configure the project
     BUILD_COMMAND ${LIBFDT_BUILD_COMMAND} # Command to build the project
     INSTALL_COMMAND ${LIBFDT_INSTALL_COMMAND} # Command to install the project
-    BUILD_BYPRODUCTS ${LIBFDT_INSTALL_DIR}/libfdt.a ${LIBFDT_INSTALL_DIR}/libfdt.so
+    BUILD_BYPRODUCTS ${LIBFDT_INSTALL_DIR}/libfdt.so
   )
+
   # Add libfdt and libkcapi dependency for fcs
   add_dependencies(FCS libfdt)
 
   # link fdt library with FCS
-  if(LIBRARY_TYPE STREQUAL STATIC)
-    target_link_libraries(
-      FCS
-      PUBLIC
-      ${LIBFDT_INSTALL_DIR}/libfdt.a
-    )
-  else()
-    target_link_libraries(
-	  FCS
-	  PUBLIC
-	  ${LIBFDT_INSTALL_DIR}/libfdt.so
-	)
-  endif()
+  target_link_libraries(
+    FCS
+    PUBLIC
+    ${LIBFDT_INSTALL_DIR}/libfdt.so
+  )
 
   target_include_directories(FCS PRIVATE "${LIBFDT_INSTALL_DIR}")
 
