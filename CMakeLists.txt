@@ -12,7 +12,7 @@ include(cmake/checkGit.cmake)
 get_git_commit()
 
 project(FCS
-        VERSION 2.02
+        VERSION 2.03
         LANGUAGES ASM C CXX
         DESCRIPTION "Library for FPGA Crypto Services for Altera SoCFPGAs")
 

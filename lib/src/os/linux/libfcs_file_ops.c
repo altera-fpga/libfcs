@@ -6,6 +6,7 @@
 #include <libfcs_logging.h>
 #include <string.h>
 #include <errno.h>
+#include <unistd.h>
 
 static FCS_OSAL_FILE *fcs_linux_filesys_open(FCS_OSAL_CHAR *filename,
 					     fcs_filesys_flags_t flag)
@@ -22,6 +23,10 @@ static FCS_OSAL_FILE *fcs_linux_filesys_open(FCS_OSAL_CHAR *filename,
 	if (flag == FCS_FILE_READ) {
 		file = fopen(filename, "r");
 	} else if (flag == FCS_FILE_WRITE) {
+		if (access(filename, F_OK) == 0) {
+			FCS_LOG_WRN(" %s already exists\n", filename);
+		}
+		errno = 0;
 		file = fopen(filename, "w+");
 	} else if (flag == FCS_FILE_APPEND) {
 		file = fopen(filename, "a+");

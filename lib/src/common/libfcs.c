@@ -4457,7 +4457,7 @@ FCS_OSAL_INT fcs_aes_crypt_streaming(FCS_OSAL_UUID *session_uuid,
 	}
 
 	/* Open output file for storing result of AES encryption/decryption */
-	aes_dst_handle = filesys_intf.open(req->outfilename, FCS_FILE_APPEND);
+	aes_dst_handle = filesys_intf.open(req->outfilename, FCS_FILE_WRITE);
 	if (!aes_dst_handle) {
 		FCS_LOG_ERR("Error in opening output file %s\n",
 			    strerror(errno));
