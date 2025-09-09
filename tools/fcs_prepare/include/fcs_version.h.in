@@ -1,0 +1,4 @@
+#pragma once
+
+#define FCS_PROJECT_VERSION "@PROJECT_VERSION@"
+#define FCS_GIT_HASH "@GIT_HASH@"

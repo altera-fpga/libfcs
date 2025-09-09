@@ -11,6 +11,14 @@ include(cmake/checkGit.cmake)
 
 get_git_commit()
 
+# Option to build fcs_prepare tool
+if(BUILD_FCS_PREPARE)
+  message(STATUS "Configuring fcs_prepare tool")
+  # 1st argument: <source_dir>, 2nd argument: <binary_dir>
+  add_subdirectory(tools/fcs_prepare tools/fcs_prepare)
+  return()
+endif()
+
 project(FCS
         VERSION 2.03
         LANGUAGES ASM C CXX
