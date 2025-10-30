@@ -37,6 +37,11 @@
 #define SDOS_DECRYPTION_REPROVISION_KEY_WARN	0x102
 #define SDOS_DECRYPTION_NOT_LATEST_KEY_WARN	0x103
 
+/* Platform definitions */
+#define AGILEX7_PLATFORM	1
+#define AGILEX5_PLATFORM	2
+#define N5X_PLATFORM		3
+
 /**
  * @brief Enumeration for the state of the FCS library.
  */
@@ -71,6 +76,11 @@ static struct libfcs_osal_intf *intf;
 static struct fcs_filesys_intf filesys_intf;
 
 /**
+ * @brief Read platform type from the sysfs.
+ */
+static FCS_OSAL_INT platform;
+
+/**
  * @brief Macro to lock the mutex.
  */
 #define MUTEX_LOCK()   fcs_mutex_timedlock(&ctx.mutex, FCS_TIME_FOREVER)
@@ -88,6 +98,7 @@ static struct fcs_filesys_intf filesys_intf;
 FCS_OSAL_INT libfcs_init(FCS_OSAL_CHAR *log_level)
 {
 	FCS_OSAL_INT ret = 0;
+	FCS_OSAL_CHAR plat;
 
 	/* Check if the library is already initialized or in the process of initialization */
 	if (ctx.state != un_initialized) {
@@ -139,6 +150,15 @@ FCS_OSAL_INT libfcs_init(FCS_OSAL_CHAR *log_level)
 		FCS_LOG_ERR("Error in initializing OSAL\n");
 		return ret;
 	}
+
+	ret = intf->platform_get(&plat);
+	if (ret != 0) {
+		FCS_LOG_ERR("Error in getting platform type\n");
+		return ret;
+	}
+
+	/* Get the platform information */
+	platform = plat - '0';
 
 	/* Set the state to initialized */
 	ctx.state = initialized;
@@ -1077,7 +1097,7 @@ FCS_OSAL_INT fcs_sdos_encrypt(FCS_OSAL_UUID *session_uuid,
 	struct fcs_cmd_context sdos_ctx;
 	FCS_OSAL_INT err_code = 0;
 
-	if (!session_uuid) {
+	if (!session_uuid && platform != N5X_PLATFORM) {
 		FCS_LOG_ERR("Invalid argument: session_uuid is NULL\n");
 		return -EINVAL;
 	}
@@ -1168,7 +1188,7 @@ FCS_OSAL_INT fcs_sdos_decrypt(FCS_OSAL_UUID *session_uuid,
 	struct fcs_cmd_context sdos_ctx;
 	FCS_OSAL_INT err_code = 0;
 
-	if (!session_uuid) {
+	if (!session_uuid && platform != N5X_PLATFORM) {
 		FCS_LOG_ERR("Invalid argument: session_uuid is NULL\n");
 		return -EINVAL;
 	}

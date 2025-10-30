@@ -2372,11 +2372,6 @@ int main(int argc, char *argv[])
 			return -EINVAL;
 		}
 
-		if (is_session_id_valid(session_uuid)) {
-			fprintf(stderr, "Session ID Invalid\n");
-			return -EINVAL;
-		}
-
 		file_size = get_buffer_size_from_file(filename);
 		if (file_size == 0) {
 			fprintf(stderr, "File: %s empty\n", filename);
@@ -2496,11 +2491,6 @@ int main(int argc, char *argv[])
 	case FCS_DEV_DATA_DECRYPTION_CMD:
 		if (!filename || !outfilename) {
 			fprintf(stderr, "Missing input file list or output filename");
-			return -EINVAL;
-		}
-
-		if (is_session_id_valid(session_uuid)) {
-			fprintf(stderr, "Session ID Invalid\n");
 			return -EINVAL;
 		}
 

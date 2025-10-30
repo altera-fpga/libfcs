@@ -98,6 +98,7 @@ static FCS_OSAL_INT fcs_linux_get_digest_final(struct fcs_cmd_context *ctx);
 static FCS_OSAL_INT fcs_linux_mac_verify_init(struct fcs_cmd_context *ctx);
 static FCS_OSAL_INT fcs_linux_mac_verify_update(struct fcs_cmd_context *ctx);
 static FCS_OSAL_INT fcs_linux_mac_verify_final(struct fcs_cmd_context *ctx);
+static FCS_OSAL_INT fcs_linux_platform_get(FCS_OSAL_CHAR *platform);
 
 /**
  * @brief Allocate memory of given size.
@@ -1303,6 +1304,23 @@ static FCS_OSAL_INT fcs_linux_mac_verify_final(struct fcs_cmd_context *ctx)
 }
 
 /**
+ * @brief Get the platform information
+ *
+ * @param platform Pointer to store the platform information.
+ *
+ * @return 0 on success, otherwise value on error.
+ */
+static FCS_OSAL_INT fcs_linux_platform_get(char *platform)
+{
+	if (!platform) {
+		FCS_LOG_ERR("Invalid argument: platform is NULL\n");
+		return -EINVAL;
+	}
+	/* Get the platform information from the device attributes */
+	return get_devattr(fcs_dev_local, "platform", platform, sizeof(*platform));
+}
+
+/**
  * @brief Bind the OSAL API to the interface.
  *
  * @param intf Pointer to the OSAL interface.
@@ -1368,6 +1386,7 @@ static FCS_OSAL_INT fcs_linux_api_binding(struct libfcs_osal_intf *intf)
 	intf->aes_crypt_init = fcs_linux_aes_crypt_init;
 	intf->aes_crypt_update = fcs_linux_aes_crypt_update;
 	intf->aes_crypt_final = fcs_linux_aes_crypt_final;
+	intf->platform_get = fcs_linux_platform_get;
 
 	return 0;
 }

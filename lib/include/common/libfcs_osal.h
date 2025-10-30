@@ -429,6 +429,7 @@ struct libfcs_osal_intf {
 	FCS_OSAL_INT (*mac_verify_init)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*mac_verify_update)(struct fcs_cmd_context *ctx);
 	FCS_OSAL_INT (*mac_verify_final)(struct fcs_cmd_context *ctx);
+	FCS_OSAL_INT (*platform_get)(FCS_OSAL_CHAR *platform);
 };
 
 /**
