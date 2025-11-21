@@ -3116,20 +3116,22 @@ FCS_OSAL_INT fcs_validate_hps_image(FCS_OSAL_UUID *session_uuid,
 			goto free_hps_buff;
 		}
 
-		FCS_LOG_DBG("prnt_node = %d\n", prnt_node);
+		FCS_LOG_DBG("parent node found at offset = %d\n", prnt_node);
 		/* Process its subnodes, extract the desired component from image */
 		noffset = fcs_fit_next_node(hps_buff, prnt_node, &ndepth);
 		FCS_LOG_DBG("noffset = %d, ndepth = %d\n", noffset, ndepth);
 
-		while (noffset >= 0) {
+		/** Iterate through each subnode of the parent node and
+		 * perform necessary processing for each subnode */
+		while (noffset >= 0 && ndepth > 0) {
 			if (ndepth == 1) {
 				/* Process subnodes */
 				FCS_OSAL_CHAR *img = NULL;
 				FCS_OSAL_SIZE img_size = 0;
 				FCS_OSAL_SIZE img_data_size = 0;
 
-				FCS_LOG_DBG("extracting HPS image data noffset = %d\n",
-					    noffset);
+				FCS_LOG_DBG("extracting HPS image: [%s] at data noffset = %d\n",
+					    fcs_fdt_get_name(hps_buff, noffset, NULL), noffset);
 				/* Get the image data */
 				ret = fcs_fit_image_get_data_and_size(hps_buff,
 								      noffset,

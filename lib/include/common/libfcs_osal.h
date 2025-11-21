@@ -531,6 +531,7 @@ FCS_OSAL_INT fcs_fit_get_noffset(FCS_OSAL_CHAR *fit, const FCS_OSAL_CHAR *path);
 
 FCS_OSAL_INT fcs_fit_next_node(FCS_OSAL_CHAR *fit, FCS_OSAL_INT offset,
 			       FCS_OSAL_INT *depth);
+const FCS_OSAL_CHAR *fcs_fdt_get_name(FCS_OSAL_CHAR *fit, FCS_OSAL_INT noffset, FCS_OSAL_INT *len);
 /**
  * @brief Get the position of the data in the FIT image
  *

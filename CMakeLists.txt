@@ -20,7 +20,7 @@ if(BUILD_FCS_PREPARE)
 endif()
 
 project(FCS
-        VERSION 3.00
+        VERSION 3.01
         LANGUAGES ASM C CXX
         DESCRIPTION "Library for FPGA Crypto Services for Altera SoCFPGAs")
 
