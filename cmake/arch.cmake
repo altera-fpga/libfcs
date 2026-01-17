@@ -8,4 +8,4 @@ if (NOT DEFINED ARCH)
 endif ()
 
 # Setup platform toolchain file.
-include(${CMAKE_SOURCE_DIR}/toolchain/${ARCH}/toolchain.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/toolchain/${ARCH}/toolchain.cmake)
